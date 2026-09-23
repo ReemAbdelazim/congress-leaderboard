@@ -111,6 +111,20 @@
           <div class="panel">
             <h2>Scores</h2>
             <p class="hint">Changes go live on every screen right away. Quick taps are grouped into one update.</p>
+            <div class="search-bar">
+              <div class="search-row">
+                <div class="search">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M20 20l-4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                  <input class="field" id="a-search" type="search" placeholder="Search teams" autocomplete="off" spellcheck="false" aria-label="Search teams" aria-controls="a-list">
+                </div>
+                <select class="field" id="a-sort" aria-label="Sort teams">
+                  <option value="added">Order added</option>
+                  <option value="name">Name A–Z</option>
+                  <option value="points">Most points</option>
+                </select>
+              </div>
+              <div class="search-meta"><span id="a-count" aria-live="polite"></span><span class="kbd-hint">Press <kbd>/</kbd> to search · <kbd>Enter</kbd> jumps to a single match</span></div>
+            </div>
             <div id="a-list"></div>
           </div>
         </div>

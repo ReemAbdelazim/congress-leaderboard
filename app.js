@@ -175,27 +175,68 @@ function addChip(container, d) {
 
 /* ---------- admin ---------- */
 const aRows = new Map();
+// Search: case- and accent-insensitive match on the team name
+const norm = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+function paintName(el, name, q) {
+  const i = q ? norm(name).indexOf(q) : -1;
+  if (i < 0 || norm(name).length !== name.length) { el.textContent = name; return; }
+  el.replaceChildren(name.slice(0, i), h("mark", { text: name.slice(i, i + q.length) }), name.slice(i + q.length));
+}
+function adminMatches() {
+  const q = norm($("a-search").value);
+  return [...state.groups.values()].filter(g => !q || norm(g.name).includes(q));
+}
 function renderAdmin() {
   if (!state.isAdmin) return;
   const wrap = $("a-list");
-  const groups = [...state.groups.values()].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.name.localeCompare(b.name));
-  if (!groups.length) { wrap.replaceChildren(h("p", { class: "empty-note", text: "No groups yet. Add one with the form." })); aRows.clear(); return; }
+  const q = norm($("a-search").value);
+  const sort = $("a-sort").value;
+  const rankOf = new Map(ranked().map(g => [g.id, g.rank]));
+  const groups = [...state.groups.values()].sort(
+    sort === "name" ? (a, b) => a.name.localeCompare(b.name)
+    : sort === "points" ? (a, b) => b.points - a.points || a.name.localeCompare(b.name)
+    : (a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.name.localeCompare(b.name));
   const note = wrap.querySelector(".empty-note"); if (note) note.remove();
+  if (!groups.length) { wrap.replaceChildren(h("p", { class: "empty-note", text: "No groups yet. Add one with the form." })); aRows.clear(); $("a-count").textContent = ""; return; }
   const keep = new Set(groups.map(g => g.id));
   for (const [id, r] of aRows) if (!keep.has(id)) { r.el.remove(); aRows.delete(id); }
+  let shown = 0;
   for (const g of groups) {
     let r = aRows.get(g.id);
     if (!r) { r = buildAdminRow(g.id); aRows.set(g.id, r); }
+    const match = !q || norm(g.name).includes(q);
+    r.el.hidden = !match;   // hide rather than remove, so half-typed amounts survive a search
+    if (match) shown++;
     r.sw.style.background = safeColor(g.color);
-    r.name.textContent = g.name;
+    paintName(r.name, g.name, q);
+    r.rank.textContent = "#" + rankOf.get(g.id);
     const p = pending.get(g.id) || 0;
     r.pts.textContent = fmt(g.points + p);
     r.pts.classList.toggle("pending", p !== 0 || flushing.has(g.id));
     wrap.append(r.el);
   }
+  const total = groups.length;
+  $("a-count").textContent = q ? `${shown} of ${total} teams match “${$("a-search").value.trim()}”` : `${total} team${total === 1 ? "" : "s"}`;
+  if (q && !shown) wrap.append(h("p", { class: "empty-note", text: "No teams match that search. Check the spelling or clear the search." }));
 }
+$("a-search").addEventListener("input", renderAdmin);
+$("a-sort").addEventListener("change", renderAdmin);
+$("a-search").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.target.value = ""; renderAdmin(); }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const m = adminMatches();
+    if (m.length === 1) { const inp = document.getElementById("amt-" + m[0].id); inp.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" }); inp.focus(); }
+    else if (m.length > 1) toast(`${m.length} teams match. Keep typing to narrow it down.`);
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "/" || state.view !== "admin" || !state.isAdmin) return;
+  const t = e.target; if (t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
+  e.preventDefault(); $("a-search").focus(); $("a-search").select();
+});
 function buildAdminRow(id) {
-  const sw = h("span", { class: "swatch" }), name = h("span", { class: "aname" }), pts = h("span", { class: "apts" });
+  const sw = h("span", { class: "swatch" }), name = h("span", { class: "aname" }), pts = h("span", { class: "apts" }), rank = h("span", { class: "arank", title: "Current rank" });
   const quick = h("div", { class: "quick" }, [-5, -1, 1, 5, 10].map(d => h("button", {
     type: "button", class: d > 0 ? "plus" : "minus", text: (d > 0 ? "+" : "−") + Math.abs(d),
     "aria-label": (d > 0 ? "Add " : "Subtract ") + Math.abs(d), onclick: () => bump(id, d),
@@ -227,8 +268,8 @@ function buildAdminRow(id) {
     inp.focus(); inp.select();
   }
   resetTools();
-  const el = h("div", { class: "arow" }, h("div", { class: "line1" }, sw, name, pts), quick, custom, tools);
-  return { el, sw, name, pts };
+  const el = h("div", { class: "arow" }, h("div", { class: "line1" }, rank, sw, name, pts), quick, custom, tools);
+  return { el, sw, name, pts, rank };
 }
 function confirmInline(container, question, yes, onYes, onDone) {
   let t;
