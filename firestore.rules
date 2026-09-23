@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // An organiser is a signed-in account whose user ID has a document in /admins.
+    // Add organisers in the Firebase console: Firestore → admins → Add document (ID = their user ID).
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function validGroup() {
+      let d = request.resource.data;
+      return d.name is string && d.name.size() > 0 && d.name.size() <= 60
+        && d.points is number
+        && (!('color' in d) || (d.color is string && d.color.size() <= 9));
+    }
+
+    // Public: anyone can read groups and board settings
+    match /groups/{groupId} {
+      allow read: if true;
+      allow create, update: if isAdmin() && validGroup();
+      allow delete: if isAdmin();
+    }
+
+    match /meta/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Change log: organisers only
+    match /log/{entryId} {
+      allow read, create, delete: if isAdmin();
+    }
+
+    // Each person may check only their own organiser record; nobody can write it from the site
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+  }
+}

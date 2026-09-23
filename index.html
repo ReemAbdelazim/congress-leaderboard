@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#061824">
+<meta name="description" content="Live group standings for Seeds Congress 2026.">
+<title>Seeds Congress Leaderboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 112'%3E%3Cg fill='%231F3349'%3E%3Cpath d='M6 58 L20 44 L20 88 L6 88 Z'/%3E%3Cpath d='M6 92 H20 V112 H6 Z'/%3E%3Cpath d='M26 34 L40 20 L40 64 L26 64 Z'/%3E%3Cpath d='M26 68 H40 V112 H26 Z'/%3E%3Cpath d='M46 16 L60 2 L60 40 L46 40 Z'/%3E%3Cpath d='M46 44 H60 V88 H46 Z'/%3E%3Cpath d='M46 92 H60 V112 H46 Z'/%3E%3C/g%3E%3Cg fill='%234FB06D'%3E%3Cpath d='M62 24 C62 12 70 6 76 -2 C80 12 74 20 62 24 Z'/%3E%3Cpath d='M60 38 C66 24 78 20 98 18 C94 32 82 42 66 40 Z'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600&family=Montserrat:wght@500;600;700;800&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="rings" aria-hidden="true">
+  <svg viewBox="0 0 400 400" fill="none">
+    <circle cx="200" cy="200" r="120" stroke="#8AD09B" stroke-opacity=".10" stroke-width="22"/>
+    <circle cx="200" cy="200" r="158" stroke="#8AD09B" stroke-opacity=".07" stroke-width="22"/>
+    <circle cx="200" cy="200" r="196" stroke="#8AD09B" stroke-opacity=".045" stroke-width="6"/>
+  </svg>
+  <svg class="b" viewBox="0 0 400 400" fill="none">
+    <circle cx="200" cy="200" r="130" stroke="#4FB06D" stroke-opacity=".08" stroke-width="18"/>
+    <circle cx="200" cy="200" r="170" stroke="#4FB06D" stroke-opacity=".05" stroke-width="3"/>
+  </svg>
+</div>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 100 112" aria-hidden="true">
+        <g fill="#EAF4EE">
+          <path d="M6 58 L20 44 L20 88 L6 88 Z"/><path d="M6 92 H20 V112 H6 Z"/>
+          <path d="M26 34 L40 20 L40 64 L26 64 Z"/><path d="M26 68 H40 V112 H26 Z"/>
+          <path d="M46 16 L60 2 L60 40 L46 40 Z"/><path d="M46 44 H60 V88 H46 Z"/><path d="M46 92 H60 V112 H46 Z"/>
+        </g>
+        <g fill="#8AD09B">
+          <path d="M62 24 C62 12 70 6 76 -2 C80 12 74 20 62 24 Z"/>
+          <path d="M60 38 C66 24 78 20 98 18 C94 32 82 42 66 40 Z"/>
+        </g>
+      </svg>
+      <div class="words"><span class="seeds">Seeds</span><span class="congress">CONGRESS</span></div>
+    </div>
+    <div class="top-right">
+      <span class="live" id="live" data-state="syncing" role="status"><span class="dot"></span><span id="live-text">Connecting</span></span>
+      <button class="icon-btn" id="fs-btn" type="button" hidden>Full screen</button>
+      <div class="tabs" id="tabs" role="tablist" hidden>
+        <button type="button" role="tab" id="tab-board" aria-selected="true">Leaderboard</button>
+        <button type="button" role="tab" id="tab-admin" aria-selected="false">Admin</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="view-board">
+      <div class="hero">
+        <div>
+          <div class="eyebrow" id="b-sub">Live standings</div>
+          <h1 id="b-title">Congress 2026</h1>
+        </div>
+        <div class="meta" id="b-meta"></div>
+      </div>
+      <div id="board"></div>
+    </section>
+
+    <!-- Shown when someone opens the Admin view but isn't a signed-in organiser -->
+    <section id="view-signin" hidden>
+      <div class="panel signin">
+        <h2>Organiser sign in</h2>
+        <div id="signin-out">
+          <p class="hint">Only organisers can add groups and change scores. Everyone else can watch the leaderboard without signing in.</p>
+          <div class="stack">
+            <button class="btn primary" type="button" id="google-btn">Sign in with Google</button>
+          </div>
+          <div class="or">or</div>
+          <form id="email-form" class="stack" autocomplete="on">
+            <div>
+              <label class="lbl" for="si-email">Email</label>
+              <input class="field" id="si-email" type="email" autocomplete="username" required>
+            </div>
+            <div>
+              <label class="lbl" for="si-pass">Password</label>
+              <input class="field" id="si-pass" type="password" autocomplete="current-password" required>
+            </div>
+            <button class="btn" type="submit">Sign in with email</button>
+          </form>
+        </div>
+        <div id="signin-pending" hidden>
+          <p class="hint">You're signed in as <strong id="si-who"></strong>, but this account isn't an organiser yet.</p>
+          <label class="lbl">Send this account ID to the leaderboard owner so they can add you:</label>
+          <div class="uid" id="si-uid"></div>
+          <div class="actions" style="margin-top:14px">
+            <button class="btn" type="button" id="copy-uid">Copy ID</button>
+            <button class="btn ghost" type="button" id="recheck-btn">Check again</button>
+            <button class="btn ghost" type="button" id="signout-2">Sign out</button>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:16px">
+          <button class="btn ghost" type="button" id="back-board">Back to leaderboard</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-admin" hidden>
+      <div class="actions" style="margin-top:24px; justify-content:space-between">
+        <span class="who" id="admin-who"></span>
+        <button class="btn ghost" type="button" id="signout-btn">Sign out</button>
+      </div>
+      <div class="admin">
+        <div class="col">
+          <div class="panel">
+            <h2>Scores</h2>
+            <p class="hint">Changes go live on every screen right away. Quick taps are grouped into one update.</p>
+            <div id="a-list"></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="panel">
+            <h2>Add a group</h2>
+            <form id="add-form" autocomplete="off">
+              <div class="form-grid">
+                <div>
+                  <label class="lbl" for="add-name">Group name</label>
+                  <input class="field" id="add-name" maxlength="60" placeholder="e.g. Team Cedar" required>
+                </div>
+                <div>
+                  <label class="lbl" for="add-points">Starting pts</label>
+                  <input class="field" id="add-points" type="number" step="1" value="0">
+                </div>
+              </div>
+              <label class="lbl" style="margin-top:14px">Colour</label>
+              <div class="swatches" id="add-swatches"></div>
+              <div class="actions" style="margin-top:16px"><button class="btn primary" type="submit" id="add-btn">Add group</button></div>
+            </form>
+          </div>
+
+          <div class="panel">
+            <h2>Board settings</h2>
+            <form id="settings-form" autocomplete="off">
+              <label class="lbl" for="set-title">Title</label>
+              <input class="field" id="set-title" maxlength="80">
+              <label class="lbl" for="set-sub" style="margin-top:12px">Subtitle</label>
+              <input class="field" id="set-sub" maxlength="80">
+              <div class="actions" style="margin-top:14px"><button class="btn" type="submit">Save settings</button></div>
+            </form>
+            <div class="toggle">
+              <div><div class="t">Hide scores for the reveal</div><div class="s">Public view shows a holding screen.</div></div>
+              <label class="switch"><input type="checkbox" id="set-hidden" aria-label="Hide scores for the reveal"><span></span></label>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Recent changes</h2>
+            <ul class="log" id="a-log"></ul>
+          </div>
+
+          <div class="panel">
+            <h2>Reset</h2>
+            <div class="actions" id="danger"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Your decision to make, your action to take.</span>
+    <button class="linkish" type="button" id="organiser-link">Organiser sign in</button>
+  </footer>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
