@@ -178,6 +178,13 @@
   .arank { font-family: var(--display); font-weight: 700; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 34px; }
   mark { background: rgba(138, 208, 155, .28); color: var(--text); border-radius: 3px; padding: 0 1px; }
   @media (max-width: 560px) { .kbd-hint { display: none; } }
+  /* Sign-in role choice */
+  .role-pick { display: grid; gap: 8px; margin: 4px 0 16px; }
+  .role-pick .lbl { margin: 0; }
+  .role-types { display: flex; }
+  .role-types button { flex: 1; padding: 10px 12px; font-size: 14px; }
+  .role-types button[aria-checked="true"] { background: var(--mint); color: var(--ink); }
+  .role-pick .hint { margin: 0; }
   /* Roles */
   body.volunteer .admin-only { display: none !important; }
   body:not(.volunteer) .volunteer-only { display: none !important; }

@@ -742,6 +742,47 @@ $("copy-uid").addEventListener("click", async () => {
 });
 $("recheck-btn").addEventListener("click", () => checkAdmin(state.user));
 
+/* ---------- which role someone is signing in for ---------- */
+const ROLE_INFO = {
+  admin: { label: "Organiser", article: "an organiser", coll: "admins", desc: "Full control: teams, every point type, stations and settings." },
+  volunteer: { label: "Volunteer", article: "a volunteer", coll: "volunteers", desc: "Records hub activity only: pick the station and enter how many delegates took part." },
+};
+let wantRole = null;
+try { wantRole = sessionStorage.getItem("wantRole"); } catch (e) {}
+if (!ROLE_INFO[wantRole]) wantRole = null;
+function renderRolePick() {
+  const info = ROLE_INFO[wantRole];
+  document.querySelectorAll(".role-types button").forEach(b => b.setAttribute("aria-checked", String(b.dataset.role === wantRole)));
+  $("role-desc").textContent = info ? info.desc : "Choose one to continue.";
+  $("google-btn").disabled = $("email-btn").disabled = !info;
+  $("si-want").textContent = info ? info.label.toLowerCase() : "organiser or volunteer";
+  $("si-instr").textContent = info ? `Send this account ID to an organiser so they can add you as ${info.article}:` : "Choose the access you need, then send this account ID to an organiser:";
+  $("si-where").textContent = info
+    ? `For the organiser: in Firebase → Firestore, open the “${info.coll}” collection and add a document with this ID as the document ID and a “name” field.`
+    : "";
+  $("copy-request").disabled = !info;
+}
+function setWantRole(r) {
+  wantRole = r;
+  try { sessionStorage.setItem("wantRole", r); } catch (e) {}
+  renderRolePick();
+}
+document.querySelectorAll(".role-types button").forEach(b => b.addEventListener("click", () => setWantRole(b.dataset.role)));
+document.querySelectorAll(".role-types").forEach(g => g.addEventListener("keydown", (e) => {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+  e.preventDefault();
+  const next = wantRole === "admin" ? "volunteer" : "admin";
+  setWantRole(next); g.querySelector(`[data-role="${next}"]`).focus();
+}));
+$("copy-request").addEventListener("click", async () => {
+  const info = ROLE_INFO[wantRole], u = state.user; if (!info || !u) return;
+  const who = u.displayName || u.email || "me";
+  const msg = `Please add ${who} to the Congress leaderboard as ${info.article}.\nAccount ID: ${u.uid}\nFirestore collection: ${info.coll} (document ID = the account ID, add a "name" field)`;
+  try { await navigator.clipboard.writeText(msg); toast("Request copied. Paste it to an organiser."); }
+  catch (e) { toast("Couldn't copy automatically. Use Copy ID only instead."); }
+});
+renderRolePick();
+
 async function checkAdmin(user) {
   state.user = user;
   let role = null, rec = null;
@@ -767,6 +808,7 @@ async function checkAdmin(user) {
     }, () => {});
   }
   if (user && !role && state.view !== "board") toast("This account doesn't have organiser or volunteer access yet.");
+  else if (role && wantRole && role !== wantRole) toast(`This account has ${ROLE_INFO[role].label.toLowerCase()} access, so you're signed in as ${ROLE_INFO[role].article}.`);
   setView(state.view);
 }
 

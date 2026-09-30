@@ -33,7 +33,7 @@ A live leaderboard for Seeds Congress 2026. Anyone with the link sees the standi
 
 ## 3. Make yourself (and others) organisers
 
-1. Open the site and click **Organiser sign in** at the bottom (or add `#admin` to the address).
+1. Open the site and click **Organiser & volunteer sign in** at the bottom (or add `#admin` to the address), then choose **Organiser**.
 2. Sign in. The page shows your **account ID**. Copy it.
 3. In Firebase go to **Firestore → Start collection**. Enter `admins` as the collection ID and paste the account ID as the document ID. Add any field (for example `name` = `Aya`) and save.
 4. Click **Check again** on the site. The Admin tab appears.
@@ -44,7 +44,7 @@ Repeat step 3 for every organiser. To remove someone, delete their document in `
 
 Volunteers can only record hub activity: pick a team, choose the station and enter how many delegates took part. They can see each team's delegation size and the change log, but can't add teams, give bonus or fundraiser points, rename, recolour, change delegation sizes, change settings or reset anything. The Firestore rules enforce this, so it can't be bypassed from the browser.
 
-1. The volunteer opens the site, clicks **Organiser & volunteer sign in** and signs in. The page shows their account ID.
+1. The volunteer opens the site, clicks **Organiser & volunteer sign in**, chooses **Volunteer** and signs in. The page shows their account ID and which collection to add it to; **Copy access request** copies a ready-to-send message.
 2. In Firebase go to **Firestore → Start collection** (or open it if it exists). Collection ID `volunteers`, document ID = their account ID, field `name` = their name. Save.
 3. They click **Check again**. A **Hub points** tab appears.
 

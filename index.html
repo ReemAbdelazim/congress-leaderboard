@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600&family=Montserrat:wght@500;600;700;800&display=swap">
-<link rel="stylesheet" href="styles.css?v=2026-10-01">
+<link rel="stylesheet" href="styles.css?v=2026-10-01b">
 </head>
 <body>
 <div class="rings" aria-hidden="true">
@@ -70,8 +70,16 @@
         <h2>Organiser &amp; volunteer sign in</h2>
         <div id="signin-out">
           <p class="hint">Only organisers and hub volunteers can change scores. Everyone else can watch the leaderboard without signing in.</p>
+          <div class="role-pick">
+            <span class="lbl" id="role-pick-label">I'm signing in as</span>
+            <div class="types role-types" role="radiogroup" aria-labelledby="role-pick-label">
+              <button type="button" role="radio" aria-checked="false" data-role="admin">Organiser</button>
+              <button type="button" role="radio" aria-checked="false" data-role="volunteer">Volunteer</button>
+            </div>
+            <p class="hint" id="role-desc">Choose one to continue.</p>
+          </div>
           <div class="stack">
-            <button class="btn primary" type="button" id="google-btn">Sign in with Google</button>
+            <button class="btn primary" type="button" id="google-btn" disabled>Sign in with Google</button>
           </div>
           <div class="or">or</div>
           <form id="email-form" class="stack" autocomplete="on">
@@ -83,15 +91,24 @@
               <label class="lbl" for="si-pass">Password</label>
               <input class="field" id="si-pass" type="password" autocomplete="current-password" required>
             </div>
-            <button class="btn" type="submit">Sign in with email</button>
+            <button class="btn" type="submit" id="email-btn" disabled>Sign in with email</button>
           </form>
         </div>
         <div id="signin-pending" hidden>
-          <p class="hint">You're signed in as <strong id="si-who"></strong>, but this account doesn't have organiser or volunteer access yet.</p>
-          <label class="lbl">Send this account ID to an organiser so they can add you:</label>
+          <p class="hint">You're signed in as <strong id="si-who"></strong>. This account doesn't have <strong id="si-want"></strong> access yet.</p>
+          <label class="lbl" id="si-instr">Send this account ID to an organiser so they can add you:</label>
           <div class="uid" id="si-uid"></div>
+          <p class="hint" id="si-where" style="margin:10px 0 0"></p>
+          <div class="role-pick" style="margin:14px 0 0">
+            <span class="lbl" id="role-pick-label-2">Access you're requesting</span>
+            <div class="types role-types" role="radiogroup" aria-labelledby="role-pick-label-2">
+              <button type="button" role="radio" aria-checked="false" data-role="admin">Organiser</button>
+              <button type="button" role="radio" aria-checked="false" data-role="volunteer">Volunteer</button>
+            </div>
+          </div>
           <div class="actions" style="margin-top:14px">
-            <button class="btn" type="button" id="copy-uid">Copy ID</button>
+            <button class="btn primary" type="button" id="copy-request">Copy access request</button>
+            <button class="btn" type="button" id="copy-uid">Copy ID only</button>
             <button class="btn ghost" type="button" id="recheck-btn">Check again</button>
             <button class="btn ghost" type="button" id="signout-2">Sign out</button>
           </div>
@@ -222,6 +239,6 @@
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
 
-<script type="module" src="app.js?v=2026-10-01"></script>
+<script type="module" src="app.js?v=2026-10-01b"></script>
 </body>
 </html>
