@@ -47,6 +47,7 @@
       <div class="tabs" id="tabs" role="tablist" hidden>
         <button type="button" role="tab" id="tab-board" aria-selected="true">Leaderboard</button>
         <button type="button" role="tab" id="tab-admin" aria-selected="false">Admin</button>
+        <button type="button" role="tab" id="tab-stations" aria-selected="false">Stations</button>
       </div>
     </div>
   </header>
@@ -151,19 +152,6 @@
           </div>
 
           <div class="panel">
-            <h2>Scoring</h2>
-            <form id="hub-form" autocomplete="off">
-              <label class="lbl" for="set-stations">Number of hub stations</label>
-              <div class="row2">
-                <input class="field" id="set-stations" type="number" min="1" max="50" step="1" style="max-width:120px">
-                <button class="btn" type="submit">Save stations</button>
-              </div>
-              <p class="hint" id="stations-note" style="margin:10px 0 0"></p>
-              <p class="hint" style="margin:6px 0 0">Changing this recalculates every team's hub points straight away.</p>
-            </form>
-          </div>
-
-          <div class="panel">
             <h2>Board settings</h2>
             <form id="settings-form" autocomplete="off">
               <label class="lbl" for="set-title">Title</label>
@@ -187,6 +175,40 @@
             <h2>Reset</h2>
             <div class="actions" id="danger"></div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-stations" hidden>
+      <div class="hero">
+        <div>
+          <div class="eyebrow">Hub activity</div>
+          <h1>Stations</h1>
+        </div>
+      </div>
+      <div class="stations-grid">
+        <div class="panel">
+          <h2>Number of stations</h2>
+          <form id="hub-form" autocomplete="off">
+            <label class="lbl" for="set-stations">How many hub stations</label>
+            <div class="row2">
+              <input class="field" id="set-stations" type="number" min="1" max="50" step="1" style="max-width:120px">
+              <button class="btn" type="submit">Save number</button>
+            </div>
+            <p class="hint" id="stations-note" style="margin:12px 0 0"></p>
+            <p class="hint" style="margin:6px 0 0">Changing the number recalculates every team's hub points straight away. Names and records for stations beyond the new number are kept, so raising it again brings them back.</p>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>Station names</h2>
+          <p class="hint">Names appear in the admin station picker and the change log. Leave one blank to show just its number.</p>
+          <form id="names-form" autocomplete="off">
+            <div id="st-names" class="st-names"></div>
+            <div class="actions" style="margin-top:16px">
+              <button class="btn primary" type="submit" id="names-save">Save names</button>
+              <span class="who" id="names-dirty" hidden>Unsaved changes</span>
+            </div>
+          </form>
         </div>
       </div>
     </section>

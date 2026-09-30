@@ -52,6 +52,8 @@ const signed = (n) => (r2(n) >= 0 ? "+" : "−") + fmt(Math.abs(n));
 const HUB_TOTAL = 1000;          // all stations, full delegation
 const FUND_TOTAL = 1000;         // 100% fundraised
 const stationsN = () => state.settings.stations || 8;
+const stationName = (s) => { const v = (state.settings.stationNames || [])[s - 1]; return typeof v === "string" ? v.trim() : ""; };
+const stationLabel = (s) => stationName(s) ? `Station ${s} · ${stationName(s)}` : `Station ${s}`;
 function hubPoints(g, size = g.size, n = stationsN(), hub = g.hub) {
   if (!size) return 0;
   let people = 0;
@@ -296,7 +298,7 @@ function buildAdminRow(id) {
     clearBtn.hidden = typeof prev !== "number";
     if (!size) { hubPrev.textContent = ""; return; }
     const perStation = HUB_TOTAL / n;
-    const base = `Station ${s}: each delegate is worth ${fmt(perStation / size)} pts, full team ${fmt(perStation)} pts.`;
+    const base = `${stationLabel(s)}: each delegate is worth ${fmt(perStation / size)} pts, full team ${fmt(perStation)} pts.`;
     const c = part.value === "" ? null : Number(part.value);
     if (c == null) { hubPrev.textContent = base + (typeof prev === "number" ? ` Already recorded: ${prev} of ${size}.` : ""); return; }
     if (!Number.isInteger(c) || c < 0 || c > size) { hubPrev.replaceChildren(h("span", { class: "neg", text: `Enter a whole number from 0 to ${size} (the delegation size).` })); return; }
@@ -350,13 +352,13 @@ function buildAdminRow(id) {
   }
   function fillStations(g) {
     const n = stationsN(), hub = g.hub || {};
-    const key = n + "|" + Array.from({ length: n }, (_, i) => hub["s" + (i + 1)] ?? "").join(",") + "|" + g.size;
+    const key = n + "|" + Array.from({ length: n }, (_, i) => (hub["s" + (i + 1)] ?? "") + ":" + stationName(i + 1)).join(",") + "|" + g.size;
     if (key === stKey) return;
     stKey = key;
     const keepVal = stSel.value;
     stSel.replaceChildren(...Array.from({ length: n }, (_, i) => {
       const s = i + 1, c = hub["s" + s];
-      return h("option", { value: String(s), text: typeof c === "number" ? `Station ${s} ✓ ${c}/${g.size || "?"}` : `Station ${s}` });
+      return h("option", { value: String(s), text: typeof c === "number" ? `${stationLabel(s)} ✓ ${c}/${g.size || "?"}` : stationLabel(s) });
     }));
     if (stTouched && keepVal && Number(keepVal) <= n) stSel.value = keepVal;
     else { let firstOpen = 1; for (let s = 1; s <= n; s++) if (typeof hub["s" + s] !== "number") { firstOpen = s; break; } stSel.value = String(firstOpen); }
@@ -480,8 +482,8 @@ async function recordHub(id, station, count) {
   const delta = hubPoints(g, g.size, stationsN(), { ...(g.hub || {}), ["s" + station]: count }) - hubPoints(g);
   try {
     await updateDoc(gref(id), { ["hub.s" + station]: count, points: increment(delta), updatedAt: Date.now() });
-    addLog(`Hub · Station ${station}: ${count}/${g.size} of ${g.name}${typeof prev === "number" ? ` (was ${prev})` : ""} → ${signed(delta)}`);
-    toast(`${g.name}: station ${station} recorded, ${signed(delta)} pts.`);
+    addLog(`Hub · ${stationLabel(station)}: ${count}/${g.size} of ${g.name}${typeof prev === "number" ? ` (was ${prev})` : ""} → ${signed(delta)}`);
+    toast(`${g.name}: ${stationLabel(station)} recorded, ${signed(delta)} pts.`);
     return true;
   } catch (e) { toast(errMsg(e)); return false; }
 }
@@ -491,7 +493,7 @@ async function clearHub(id, station) {
   const delta = hubPoints(g, g.size, stationsN(), hub) - hubPoints(g);
   try {
     await updateDoc(gref(id), { ["hub.s" + station]: deleteField(), points: increment(delta), updatedAt: Date.now() });
-    addLog(`Hub · Station ${station} cleared for ${g.name} → ${signed(delta)}`); toast(`Station ${station} cleared for ${g.name}.`);
+    addLog(`Hub · ${stationLabel(station)} cleared for ${g.name} → ${signed(delta)}`); toast(`${stationLabel(station)} cleared for ${g.name}.`);
   } catch (e) { toast(errMsg(e)); }
 }
 // Fundraiser: store the % raised; award only the change since the last update
@@ -607,24 +609,67 @@ $("set-hidden").addEventListener("change", (e) => {
 });
 
 /* ---------- views ---------- */
+const viewFromHash = () => ({ "#admin": "admin", "#stations": "stations" })[location.hash] || "board";
 function setView(v) {
-  state.view = v === "admin" ? "admin" : "board";
-  const admin = state.view === "admin";
-  $("view-board").hidden = admin;
-  $("view-admin").hidden = !(admin && state.isAdmin);
-  $("view-signin").hidden = !(admin && !state.isAdmin);
+  state.view = ["admin", "stations"].includes(v) ? v : "board";
+  const organiserOnly = state.view !== "board";
+  $("view-board").hidden = organiserOnly;
+  $("view-admin").hidden = !(state.view === "admin" && state.isAdmin);
+  $("view-stations").hidden = !(state.view === "stations" && state.isAdmin);
+  $("view-signin").hidden = !(organiserOnly && !state.isAdmin);
   $("tabs").hidden = !state.isAdmin;
   $("organiser-link").hidden = state.isAdmin;
-  $("tab-board").setAttribute("aria-selected", String(!admin));
-  $("tab-admin").setAttribute("aria-selected", String(admin));
-  try { history.replaceState(null, "", admin ? "#admin" : location.pathname + location.search); } catch (e) {}
+  for (const t of ["board", "admin", "stations"]) $("tab-" + t).setAttribute("aria-selected", String(state.view === t));
+  try { history.replaceState(null, "", organiserOnly ? "#" + state.view : location.pathname + location.search); } catch (e) {}
   renderAll();
 }
 $("tab-board").addEventListener("click", () => setView("board"));
 $("tab-admin").addEventListener("click", () => setView("admin"));
+$("tab-stations").addEventListener("click", () => setView("stations"));
 $("organiser-link").addEventListener("click", () => setView("admin"));
 $("back-board").addEventListener("click", () => setView("board"));
-window.addEventListener("hashchange", () => setView(location.hash === "#admin" ? "admin" : "board"));
+window.addEventListener("hashchange", () => setView(viewFromHash()));
+
+/* ---------- stations tab ---------- */
+const nameDirty = new Set();   // stations whose name field has unsaved edits
+function renderStations() {
+  if (!state.isAdmin) return;
+  const wrap = $("st-names"), n = stationsN();
+  if (wrap.children.length !== n) {
+    const old = new Map([...wrap.querySelectorAll("input")].map(i => [i.id, i.value]));
+    wrap.replaceChildren(...Array.from({ length: n }, (_, i) => {
+      const s = i + 1, id = "sn-" + s;
+      const inp = h("input", { class: "field", id, maxlength: "60", placeholder: "e.g. Leadership circle", "aria-label": `Name for station ${s}` });
+      if (old.has(id) && nameDirty.has(s)) inp.value = old.get(id);
+      inp.addEventListener("input", () => { nameDirty.add(s); $("names-dirty").hidden = false; });
+      return h("div", { class: "st-row" }, h("label", { for: id, text: "Station " + s }), inp, h("div", { class: "prog" }));
+    }));
+    for (const s of [...nameDirty]) if (s > n) nameDirty.delete(s);
+  }
+  const teams = [...state.groups.values()];
+  [...wrap.children].forEach((row, i) => {
+    const s = i + 1, inp = row.querySelector("input");
+    if (!nameDirty.has(s) && document.activeElement !== inp) inp.value = stationName(s);
+    const done = teams.filter(g => typeof (g.hub || {})["s" + s] === "number").length;
+    const pct = teams.length ? done / teams.length * 100 : 0;
+    row.querySelector(".prog").replaceChildren(h("span", { class: "bar" }, h("i", { style: `width:${pct}%` })), teams.length ? `${done} of ${teams.length} teams recorded` : "No teams yet");
+  });
+  $("names-dirty").hidden = nameDirty.size === 0;
+}
+$("names-form").addEventListener("submit", async (e) => {
+  e.preventDefault(); if (!need()) return;
+  const n = stationsN();
+  const names = [...(state.settings.stationNames || [])];
+  for (let s = 1; s <= n; s++) names[s - 1] = ($("sn-" + s).value || "").trim().slice(0, 60);
+  for (let i = 0; i < names.length; i++) if (typeof names[i] !== "string") names[i] = "";
+  const btn = $("names-save"); btn.disabled = true;
+  try {
+    await setDoc(doc(db, "meta", "settings"), { ...state.settings, stationNames: names });
+    nameDirty.clear(); $("names-dirty").hidden = true;
+    addLog("Station names updated"); toast("Station names saved.");
+  } catch (err) { toast(errMsg(err)); }
+  btn.disabled = false;
+});
 if (document.fullscreenEnabled) {
   const b = $("fs-btn"); b.hidden = false;
   b.addEventListener("click", () => { (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {}); });
@@ -632,7 +677,7 @@ if (document.fullscreenEnabled) {
 }
 function renderAll(events) {
   renderBoard(events);
-  if (state.isAdmin) { renderAdmin(); fillSettingsForm(); }
+  if (state.isAdmin) { renderAdmin(); fillSettingsForm(); renderStations(); }
 }
 
 /* ---------- sign in ---------- */
@@ -680,7 +725,7 @@ async function checkAdmin(user) {
       renderLog();
     }, () => {});
   }
-  if (user && !isAdmin && state.view === "admin") toast("This account isn't an organiser yet.");
+  if (user && !isAdmin && state.view !== "board") toast("This account isn't an organiser yet.");
   setView(state.view);
 }
 
@@ -694,7 +739,7 @@ function start() {
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
   auth = getAuth(app);
-  state.view = location.hash === "#admin" ? "admin" : "board";
+  state.view = viewFromHash();
   setView(state.view);
 
   onSnapshot(collection(db, "groups"), { includeMetadataChanges: true }, (snap) => {
@@ -724,6 +769,7 @@ function start() {
     state.settings = {
       title: x.title || "Congress 2026", subtitle: x.subtitle != null ? x.subtitle : "Live standings", hidden: !!x.hidden,
       stations: Number.isInteger(x.stations) && x.stations > 0 ? x.stations : 8,
+      stationNames: Array.isArray(x.stationNames) ? x.stationNames.slice(0, 50).map(v => typeof v === "string" ? v.slice(0, 60) : "") : [],
     };
     renderAll();
   }, () => {});

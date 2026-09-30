@@ -178,6 +178,15 @@
   .arank { font-family: var(--display); font-weight: 700; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 34px; }
   mark { background: rgba(138, 208, 155, .28); color: var(--text); border-radius: 3px; padding: 0 1px; }
   @media (max-width: 560px) { .kbd-hint { display: none; } }
+  /* Stations tab */
+  .stations-grid { display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
+  @media (min-width: 900px) { .stations-grid { grid-template-columns: 1fr 1.55fr; } }
+  .st-names { display: grid; gap: 10px; }
+  .st-row { display: grid; grid-template-columns: 88px 1fr; gap: 12px; align-items: center; }
+  .st-row label { font-family: var(--display); font-weight: 800; font-size: 13px; letter-spacing: .06em; color: var(--mint); }
+  .st-row .prog { grid-column: 2; font-size: 12px; color: var(--muted); margin-top: -4px; font-variant-numeric: tabular-nums; }
+  .st-row .prog .bar { display: inline-block; vertical-align: middle; width: 90px; height: 4px; margin-right: 8px; }
+  @media (max-width: 460px) { .st-row { grid-template-columns: 1fr; gap: 6px; } .st-row .prog { grid-column: 1; margin-top: 0; } }
   /* Point types */
   .breakdown { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .breakdown span { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); background: var(--ink); }
