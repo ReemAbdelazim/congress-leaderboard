@@ -54,7 +54,7 @@ Organisers pick the type before entering points:
 | --- | --- | --- |
 | **Bonus** | A number of points | Added as entered (negative numbers take points away) |
 | **Hub activity** | Station + how many delegates took part | participants ÷ delegation size × (1000 ÷ stations). With 8 stations a full team earns 125 per station and 1,000 for all 8. Re-recording a station replaces its earlier entry. |
-| **Fundraiser** | Total % raised so far | 1,000 × %. Only the change is awarded: 20% gives 200, then updating to 45% adds 250. |
+| **Fundraiser** | Total % raised so far | 1,000 × %. Only the change is awarded: 20% gives 200, then updating to 45% adds 250. Going past 100% keeps earning: 150% = 1,500. |
 
 Changing a team's delegation size, or the number of stations (Admin → Scoring), recalculates hub points automatically.
 

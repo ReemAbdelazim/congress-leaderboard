@@ -50,7 +50,8 @@ const signed = (n) => (r2(n) >= 0 ? "+" : "−") + fmt(Math.abs(n));
    (participants per station, % raised); bonus is whatever remains. Every change writes an atomic
    increment of the difference, so totals stay right even when organisers edit at the same time. */
 const HUB_TOTAL = 1000;          // all stations, full delegation
-const FUND_TOTAL = 1000;         // 100% fundraised
+const FUND_TOTAL = 1000;         // points for 100% of the goal; teams can go past 100%
+const FUND_MAX_PCT = 1000;       // typo guard: 4500 typed instead of 45 is refused
 const stationsN = () => state.settings.stations || 8;
 const stationName = (s) => { const v = (state.settings.stationNames || [])[s - 1]; return typeof v === "string" ? v.trim() : ""; };
 const stationLabel = (s) => stationName(s) ? `Station ${s} · ${stationName(s)}` : `Station ${s}`;
@@ -61,7 +62,7 @@ function hubPoints(g, size = g.size, n = stationsN(), hub = g.hub) {
   return people / size * (HUB_TOTAL / n);
 }
 const stationsDone = (g, n = stationsN()) => { let k = 0; for (let s = 1; s <= n; s++) if (typeof (g.hub || {})["s" + s] === "number") k++; return k; };
-const fundPoints = (pct) => Math.max(0, Math.min(100, pct || 0)) / 100 * FUND_TOTAL;
+const fundPoints = (pct) => Math.max(0, pct || 0) / 100 * FUND_TOTAL;
 const bonusPoints = (g) => g.points - hubPoints(g) - fundPoints(g.fundPct);
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
@@ -316,12 +317,12 @@ function buildAdminRow(id) {
   }
 
   // Fundraiser: % of goal raised so far; only the difference is awarded
-  const pct = h("input", { class: "field", type: "number", min: "0", max: "100", step: "0.1", id: "fp-" + id, placeholder: "% raised", "aria-label": "Percent fundraised" });
+  const pct = h("input", { class: "field", type: "number", min: "0", max: String(FUND_MAX_PCT), step: "0.1", id: "fp-" + id, placeholder: "% raised", "aria-label": "Percent fundraised" });
   const fundPrev = h("div", { class: "preview" });
   const fundGo = () => {
     const g = G(); if (!g) return;
     const v = Number(pct.value);
-    if (pct.value === "" || !Number.isFinite(v) || v < 0 || v > 100) return toast("Enter the percentage raised, from 0 to 100.");
+    if (pct.value === "" || !Number.isFinite(v) || v < 0 || v > FUND_MAX_PCT) return toast(`Enter the percentage raised, from 0 to ${FUND_MAX_PCT} (above 100 is fine).`);
     if (r2(v) === r2(g.fundPct)) return toast(`${g.name} is already at ${fmt(v)}%.`);
     updateFund(id, r2(v)).then(ok => { if (ok) { pct.value = ""; fundPreview(); } });
   };
@@ -333,11 +334,11 @@ function buildAdminRow(id) {
     const g = G(); if (!g) return;
     const cur = g.fundPct || 0;
     const v = pct.value === "" ? null : Number(pct.value);
-    if (v == null) { fundPrev.textContent = `Currently ${fmt(cur)}% raised = ${fmt(fundPoints(cur))} of ${fmt(FUND_TOTAL)} pts. Enter the new total percentage.`; return; }
-    if (!Number.isFinite(v) || v < 0 || v > 100) { fundPrev.replaceChildren(h("span", { class: "neg", text: "Enter a percentage from 0 to 100." })); return; }
+    if (v == null) { fundPrev.textContent = `Currently ${fmt(cur)}% raised = ${fmt(fundPoints(cur))} pts (100% = ${fmt(FUND_TOTAL)}). Enter the new total percentage; above 100% is allowed.`; return; }
+    if (!Number.isFinite(v) || v < 0 || v > FUND_MAX_PCT) { fundPrev.replaceChildren(h("span", { class: "neg", text: `Enter a percentage from 0 to ${FUND_MAX_PCT}.` })); return; }
     const delta = fundPoints(v) - fundPoints(cur);
     fundPrev.replaceChildren(`${fmt(cur)}% → ${fmt(v)}% = ${fmt(fundPoints(v))} pts total. `,
-      h("strong", { class: delta < 0 ? "neg" : "", text: signed(delta) + " pts" }), delta < 0 ? " (lowers their score)" : "");
+      h("strong", { class: delta < 0 ? "neg" : "", text: signed(delta) + " pts" }), delta < 0 ? " (lowers their score)" : "", v > 100 ? " · above the goal" : "");
   }
 
   const panes = { bonus: bonusPane, hub: hubPane, fund: fundPane };
@@ -455,7 +456,7 @@ function fillSettingsForm() {
   $("set-hidden").checked = !!state.settings.hidden;
   const st = $("set-stations"), n = stationsN();
   if (document.activeElement !== st) st.value = String(n);
-  $("stations-note").textContent = `Each station is worth ${fmt(HUB_TOTAL / n)} pts for a full delegation; all ${n} stations = ${fmt(HUB_TOTAL)} pts. Fundraiser: 100% = ${fmt(FUND_TOTAL)} pts.`;
+  $("stations-note").textContent = `Each station is worth ${fmt(HUB_TOTAL / n)} pts for a full delegation; all ${n} stations = ${fmt(HUB_TOTAL)} pts. Fundraiser: 100% = ${fmt(FUND_TOTAL)} pts, and teams keep earning past 100%.`;
 }
 
 /* ---------- writes (atomic increments, so two organisers tapping at once never lose points) ---------- */
