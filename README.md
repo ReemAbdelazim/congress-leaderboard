@@ -43,8 +43,20 @@ Repeat step 3 for every organiser. To remove someone, delete their document in `
 ## Using it
 
 - **Public view:** the podium shows the top 3 and the list shows everyone else with rank and points. Tied groups share a rank. Use **Full screen** for a projector.
-- **Admin view:** add groups; change scores with quick buttons, a custom amount or an exact score; rename, recolour or delete groups; edit the title; **hide scores for the reveal**; reset everything.
+- **Admin view:** search teams; add points by type; set each team's delegation size; rename, recolour or delete groups; set the number of hub stations; edit the title; **hide scores for the reveal**; reset everything.
 - Score changes are atomic increments, so two organisers tapping at the same time never lose points.
+
+## Point types
+
+Organisers pick the type before entering points:
+
+| Type | What you enter | Points |
+| --- | --- | --- |
+| **Bonus** | A number of points | Added as entered (negative numbers take points away) |
+| **Hub activity** | Station + how many delegates took part | participants ÷ delegation size × (1000 ÷ stations). With 8 stations a full team earns 125 per station and 1,000 for all 8. Re-recording a station replaces its earlier entry. |
+| **Fundraiser** | Total % raised so far | 1,000 × %. Only the change is awarded: 20% gives 200, then updating to 45% adds 250. |
+
+Changing a team's delegation size, or the number of stations (Admin → Scoring), recalculates hub points automatically.
 
 ## Limits on the free plan
 

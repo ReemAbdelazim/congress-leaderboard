@@ -1,7 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
 import {
   getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, setDoc, getDoc,
-  increment, writeBatch, query, orderBy, limit,
+  increment, writeBatch, query, orderBy, limit, deleteField,
 } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, signOut, onAuthStateChanged,
@@ -11,7 +11,7 @@ import { firebaseConfig } from "./firebase-config.js";
 const COLORS = ["#8AD09B", "#7CC4E8", "#E9C46A", "#EE8B7A", "#B9A4E8", "#5CC2B5", "#E79BC0", "#D9C7A1"];
 const state = {
   groups: new Map(),            // id -> {id,name,points,color,createdAt}
-  settings: { title: "Congress 2026", subtitle: "Live standings", hidden: false },
+  settings: { title: "Congress 2026", subtitle: "Live standings", hidden: false, stations: 8 },
   log: [],
   user: null,
   isAdmin: false,
@@ -41,7 +41,26 @@ function h(tag, attrs, ...kids) {
   for (const kid of kids.flat()) if (kid != null) el.append(kid);
   return el;
 }
-const fmt = (n) => Math.round(n).toLocaleString();
+const r2 = (n) => Math.round(n * 100) / 100;
+const fmt = (n) => r2(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
+const signed = (n) => (r2(n) >= 0 ? "+" : "−") + fmt(Math.abs(n));
+
+/* ---------- scoring ----------
+   A team's `points` is its total. Hub and fundraiser points are derived from what was recorded
+   (participants per station, % raised); bonus is whatever remains. Every change writes an atomic
+   increment of the difference, so totals stay right even when organisers edit at the same time. */
+const HUB_TOTAL = 1000;          // all stations, full delegation
+const FUND_TOTAL = 1000;         // 100% fundraised
+const stationsN = () => state.settings.stations || 8;
+function hubPoints(g, size = g.size, n = stationsN(), hub = g.hub) {
+  if (!size) return 0;
+  let people = 0;
+  for (let s = 1; s <= n; s++) { const c = hub && hub["s" + s]; if (typeof c === "number") people += Math.min(c, size); }
+  return people / size * (HUB_TOTAL / n);
+}
+const stationsDone = (g, n = stationsN()) => { let k = 0; for (let s = 1; s <= n; s++) if (typeof (g.hub || {})["s" + s] === "number") k++; return k; };
+const fundPoints = (pct) => Math.max(0, Math.min(100, pct || 0)) / 100 * FUND_TOTAL;
+const bonusPoints = (g) => g.points - hubPoints(g) - fundPoints(g.fundPct);
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
 const safeColor = (c) => /^#[0-9a-fA-F]{6}$/.test(c || "") ? c : COLORS[0];
@@ -63,6 +82,7 @@ function setLive(s) {
 /* ---------- ranking ---------- */
 function ranked() {
   const arr = [...state.groups.values()].map(g => ({ ...g }));
+  arr.forEach(g => { g.points = r2(g.points); });
   arr.sort((a, b) => b.points - a.points || a.name.localeCompare(b.name));
   let rank = 0;
   arr.forEach((g, i) => { if (i === 0 || g.points !== arr[i - 1].points) rank = i + 1; g.rank = rank; });
@@ -207,12 +227,7 @@ function renderAdmin() {
     const match = !q || norm(g.name).includes(q);
     r.el.hidden = !match;   // hide rather than remove, so half-typed amounts survive a search
     if (match) shown++;
-    r.sw.style.background = safeColor(g.color);
-    paintName(r.name, g.name, q);
-    r.rank.textContent = "#" + rankOf.get(g.id);
-    const p = pending.get(g.id) || 0;
-    r.pts.textContent = fmt(g.points + p);
-    r.pts.classList.toggle("pending", p !== 0 || flushing.has(g.id));
+    r.refresh(g, rankOf.get(g.id), q);
     wrap.append(r.el);
   }
   const total = groups.length;
@@ -226,7 +241,7 @@ $("a-search").addEventListener("keydown", (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
     const m = adminMatches();
-    if (m.length === 1) { const inp = document.getElementById("amt-" + m[0].id); inp.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" }); inp.focus(); }
+    if (m.length === 1) { const r = aRows.get(m[0].id); if (r) r.focusEntry(); }
     else if (m.length > 1) toast(`${m.length} teams match. Keep typing to narrow it down.`);
   }
 });
@@ -235,41 +250,171 @@ document.addEventListener("keydown", (e) => {
   const t = e.target; if (t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
   e.preventDefault(); $("a-search").focus(); $("a-search").select();
 });
+const TYPES = [["bonus", "Bonus"], ["hub", "Hub activity"], ["fund", "Fundraiser"]];
 function buildAdminRow(id) {
+  const G = () => state.groups.get(id);
   const sw = h("span", { class: "swatch" }), name = h("span", { class: "aname" }), pts = h("span", { class: "apts" }), rank = h("span", { class: "arank", title: "Current rank" });
-  const quick = h("div", { class: "quick" }, [-5, -1, 1, 5, 10].map(d => h("button", {
-    type: "button", class: d > 0 ? "plus" : "minus", text: (d > 0 ? "+" : "−") + Math.abs(d),
-    "aria-label": (d > 0 ? "Add " : "Subtract ") + Math.abs(d), onclick: () => bump(id, d),
-  })));
-  const amt = h("input", { class: "field", type: "number", step: "1", id: "amt-" + id, placeholder: "Amount", "aria-label": "Custom amount" });
-  const addBtn = h("button", { class: "btn", type: "button", text: "Add", onclick: () => {
+  const breakdown = h("div", { class: "breakdown" });
+  let mode = null;
+
+  // 1. Choose the type of points first
+  const typeBtns = TYPES.map(([key, label]) => h("button", { type: "button", "aria-pressed": "false", text: label, onclick: () => setMode(key) }));
+  const types = h("div", { class: "types-wrap" }, h("span", { class: "types-label", text: "Add points:" }), h("div", { class: "types", role: "group", "aria-label": "Type of points" }, typeBtns));
+
+  // Bonus: straight number
+  const amt = h("input", { class: "field", type: "number", step: "1", id: "amt-" + id, placeholder: "Points", "aria-label": "Bonus points" });
+  const bonusAdd = () => {
     const v = Math.round(Number(amt.value));
-    if (!amt.value || !Number.isFinite(v) || v === 0) return toast("Enter a number to add (use a minus sign to subtract).");
+    if (!amt.value || !Number.isFinite(v) || v === 0) return toast("Enter the bonus points to add (use a minus sign to take points away).");
     bump(id, v, true); amt.value = "";
-  } });
-  const setBtn = h("button", { class: "btn ghost", type: "button", text: "Set to", onclick: () => {
-    const v = Math.round(Number(amt.value));
-    if (amt.value === "" || !Number.isFinite(v)) return toast("Enter the exact score to set.");
-    setPoints(id, v); amt.value = "";
-  } });
-  amt.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addBtn.click(); } });
-  const custom = h("div", { class: "custom" }, amt, addBtn, setBtn);
+  };
+  amt.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); bonusAdd(); } });
+  const bonusPane = h("div", { class: "pane", hidden: true },
+    h("div", { class: "quick" }, [-5, -1, 1, 5, 10, 25].map(d => h("button", {
+      type: "button", class: d > 0 ? "plus" : "minus", text: (d > 0 ? "+" : "−") + Math.abs(d),
+      "aria-label": (d > 0 ? "Add " : "Subtract ") + Math.abs(d) + " bonus", onclick: () => bump(id, d),
+    }))),
+    h("div", { class: "row2" }, amt, h("button", { class: "btn primary", type: "button", text: "Add bonus", onclick: bonusAdd })));
+
+  // Hub activity: station + number of delegates who took part
+  const stSel = h("select", { class: "field", id: "st-" + id, "aria-label": "Station" });
+  const part = h("input", { class: "field", type: "number", min: "0", step: "1", id: "hp-" + id, placeholder: "Delegates", "aria-label": "Delegates who participated" });
+  const hubPrev = h("div", { class: "preview" });
+  const hubBtn = h("button", { class: "btn primary", type: "button", text: "Record", onclick: () => doHub() });
+  const clearBtn = h("button", { class: "btn ghost", type: "button", text: "Clear station", hidden: true, onclick: () => clearHub(id, Number(stSel.value)) });
+  const sizeNote = h("div", { class: "preview warn", hidden: true }, "Set this team's delegation size first. ", h("button", { class: "linkbtn", type: "button", text: "Set delegation size", onclick: () => openSize() }));
+  let stTouched = false, stKey = "";
+  stSel.addEventListener("change", () => { stTouched = true; hubPreview(); });
+  part.addEventListener("input", hubPreview);
+  part.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); doHub(); } });
+  const hubPane = h("div", { class: "pane", hidden: true }, sizeNote,
+    h("div", { class: "row2" }, stSel, part, hubBtn, clearBtn), hubPrev);
+  function hubPreview() {
+    const g = G(); if (!g) return;
+    const n = stationsN(), s = Number(stSel.value), size = g.size;
+    const prev = (g.hub || {})["s" + s];
+    clearBtn.hidden = typeof prev !== "number";
+    if (!size) { hubPrev.textContent = ""; return; }
+    const perStation = HUB_TOTAL / n;
+    const base = `Station ${s}: each delegate is worth ${fmt(perStation / size)} pts, full team ${fmt(perStation)} pts.`;
+    const c = part.value === "" ? null : Number(part.value);
+    if (c == null) { hubPrev.textContent = base + (typeof prev === "number" ? ` Already recorded: ${prev} of ${size}.` : ""); return; }
+    if (!Number.isInteger(c) || c < 0 || c > size) { hubPrev.replaceChildren(h("span", { class: "neg", text: `Enter a whole number from 0 to ${size} (the delegation size).` })); return; }
+    const delta = hubPoints(g, size, n, { ...(g.hub || {}), ["s" + s]: c }) - hubPoints(g);
+    hubPrev.replaceChildren(`${c} of ${size} delegates = ${fmt(c / size * perStation)} pts`,
+      typeof prev === "number" ? ` (replaces ${prev} of ${size}) ` : " ",
+      h("strong", { class: delta < 0 ? "neg" : "", text: signed(delta) + " pts" }));
+  }
+  function doHub() {
+    const g = G(); if (!g) return;
+    if (!g.size) return toast("Set the delegation size before recording hub activity.");
+    const c = Number(part.value);
+    if (part.value === "" || !Number.isInteger(c) || c < 0 || c > g.size) return toast(`Enter how many delegates took part: 0 to ${g.size}.`);
+    recordHub(id, Number(stSel.value), c).then(ok => { if (ok) { part.value = ""; stTouched = false; } });
+  }
+
+  // Fundraiser: % of goal raised so far; only the difference is awarded
+  const pct = h("input", { class: "field", type: "number", min: "0", max: "100", step: "0.1", id: "fp-" + id, placeholder: "% raised", "aria-label": "Percent fundraised" });
+  const fundPrev = h("div", { class: "preview" });
+  const fundGo = () => {
+    const g = G(); if (!g) return;
+    const v = Number(pct.value);
+    if (pct.value === "" || !Number.isFinite(v) || v < 0 || v > 100) return toast("Enter the percentage raised, from 0 to 100.");
+    if (r2(v) === r2(g.fundPct)) return toast(`${g.name} is already at ${fmt(v)}%.`);
+    updateFund(id, r2(v)).then(ok => { if (ok) { pct.value = ""; fundPreview(); } });
+  };
+  pct.addEventListener("input", fundPreview);
+  pct.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fundGo(); } });
+  const fundPane = h("div", { class: "pane", hidden: true },
+    h("div", { class: "row2" }, h("div", { class: "pct" }, pct, h("span", { text: "%" })), h("button", { class: "btn primary", type: "button", text: "Update fundraiser", onclick: fundGo })), fundPrev);
+  function fundPreview() {
+    const g = G(); if (!g) return;
+    const cur = g.fundPct || 0;
+    const v = pct.value === "" ? null : Number(pct.value);
+    if (v == null) { fundPrev.textContent = `Currently ${fmt(cur)}% raised = ${fmt(fundPoints(cur))} of ${fmt(FUND_TOTAL)} pts. Enter the new total percentage.`; return; }
+    if (!Number.isFinite(v) || v < 0 || v > 100) { fundPrev.replaceChildren(h("span", { class: "neg", text: "Enter a percentage from 0 to 100." })); return; }
+    const delta = fundPoints(v) - fundPoints(cur);
+    fundPrev.replaceChildren(`${fmt(cur)}% → ${fmt(v)}% = ${fmt(fundPoints(v))} pts total. `,
+      h("strong", { class: delta < 0 ? "neg" : "", text: signed(delta) + " pts" }), delta < 0 ? " (lowers their score)" : "");
+  }
+
+  const panes = { bonus: bonusPane, hub: hubPane, fund: fundPane };
+  function setMode(key) {
+    mode = mode === key ? null : key;
+    typeBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(TYPES[i][0] === mode)));
+    for (const [k, p] of Object.entries(panes)) p.hidden = k !== mode;
+    const first = { bonus: amt, hub: part, fund: pct }[mode];
+    if (mode === "hub") { hubPreview(); if (!G()?.size) return; }
+    if (mode === "fund") fundPreview();
+    if (first) first.focus();
+  }
+  function fillStations(g) {
+    const n = stationsN(), hub = g.hub || {};
+    const key = n + "|" + Array.from({ length: n }, (_, i) => hub["s" + (i + 1)] ?? "").join(",") + "|" + g.size;
+    if (key === stKey) return;
+    stKey = key;
+    const keepVal = stSel.value;
+    stSel.replaceChildren(...Array.from({ length: n }, (_, i) => {
+      const s = i + 1, c = hub["s" + s];
+      return h("option", { value: String(s), text: typeof c === "number" ? `Station ${s} ✓ ${c}/${g.size || "?"}` : `Station ${s}` });
+    }));
+    if (stTouched && keepVal && Number(keepVal) <= n) stSel.value = keepVal;
+    else { let firstOpen = 1; for (let s = 1; s <= n; s++) if (typeof hub["s" + s] !== "number") { firstOpen = s; break; } stSel.value = String(firstOpen); }
+  }
+
+  // Row tools
   const tools = h("div", { class: "actions" });
   const renameBtn = h("button", { class: "btn ghost", type: "button", text: "Rename", onclick: () => openRename() });
+  const sizeBtn = h("button", { class: "btn ghost", type: "button", text: "Delegation size", onclick: () => openSize() });
   const colorBtn = h("button", { class: "btn ghost", type: "button", text: "Colour", onclick: () => cycleColor(id) });
   const delBtn = h("button", { class: "btn danger", type: "button", text: "Delete", onclick: () => confirmInline(tools, "Delete this group?", "Delete", () => removeGroup(id), resetTools) });
-  function resetTools() { tools.replaceChildren(renameBtn, colorBtn, delBtn); }
+  function resetTools() { tools.replaceChildren(renameBtn, sizeBtn, colorBtn, delBtn); }
+  function inlineEdit(input, onSave) {
+    const save = async () => { if (await onSave(input.value)) resetTools(); };
+    input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } if (e.key === "Escape") resetTools(); });
+    tools.replaceChildren(h("div", { class: "rename" }, input, h("button", { class: "btn primary", type: "button", text: "Save", onclick: save }), h("button", { class: "btn ghost", type: "button", text: "Cancel", onclick: resetTools })));
+    input.focus(); input.select();
+  }
   function openRename() {
-    const g = state.groups.get(id); if (!g) return;
-    const inp = h("input", { class: "field", id: "rn-" + id, maxlength: "60", value: g.name, "aria-label": "New name" });
-    const save = async () => { const v = inp.value.trim(); if (!v) return toast("Group name can't be empty."); resetTools(); if (v !== g.name) await renameGroup(id, v); };
-    inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } if (e.key === "Escape") resetTools(); });
-    tools.replaceChildren(h("div", { class: "rename" }, inp, h("button", { class: "btn primary", type: "button", text: "Save", onclick: save }), h("button", { class: "btn ghost", type: "button", text: "Cancel", onclick: resetTools })));
-    inp.focus(); inp.select();
+    const g = G(); if (!g) return;
+    inlineEdit(h("input", { class: "field", id: "rn-" + id, maxlength: "60", value: g.name, "aria-label": "New name" }), async (raw) => {
+      const v = raw.trim(); if (!v) { toast("Group name can't be empty."); return false; }
+      if (v !== g.name) await renameGroup(id, v); return true;
+    });
+  }
+  function openSize() {
+    const g = G(); if (!g) return;
+    inlineEdit(h("input", { class: "field", id: "sz-" + id, type: "number", min: "1", max: "100", step: "1", value: g.size ? String(g.size) : "", placeholder: "People in delegation", "aria-label": "Delegation size" }), async (raw) => {
+      const v = Number(raw);
+      if (!Number.isInteger(v) || v < 1 || v > 100) { toast("Delegation size must be a whole number from 1 to 100."); return false; }
+      return v === g.size ? true : await setSize(id, v);
+    });
   }
   resetTools();
-  const el = h("div", { class: "arow" }, h("div", { class: "line1" }, rank, sw, name, pts), quick, custom, tools);
-  return { el, sw, name, pts, rank };
+
+  const el = h("div", { class: "arow" }, h("div", { class: "line1" }, rank, sw, name, pts), breakdown, types, bonusPane, hubPane, fundPane, tools);
+  function refresh(g, rk, q) {
+    sw.style.background = safeColor(g.color);
+    paintName(name, g.name, q);
+    rank.textContent = "#" + rk;
+    const p = pending.get(id) || 0;
+    pts.textContent = fmt(g.points + p);
+    pts.classList.toggle("pending", p !== 0 || flushing.has(id));
+    const n = stationsN();
+    breakdown.replaceChildren(
+      h("span", { class: g.size ? "" : "warn", text: g.size ? `Delegation: ${g.size}` : "Delegation size not set" }),
+      h("span", { text: `Bonus ${fmt(bonusPoints(g) + p)}` }),
+      h("span", { text: `Hub ${fmt(hubPoints(g))} · ${stationsDone(g)}/${n} stations` }),
+      h("span", { text: `Fundraiser ${fmt(fundPoints(g.fundPct))} · ${fmt(g.fundPct || 0)}%` }));
+    fillStations(g);
+    sizeNote.hidden = !!g.size;
+    part.max = String(g.size || 0);
+    part.disabled = hubBtn.disabled = stSel.disabled = !g.size;
+    if (mode === "hub") hubPreview();
+    if (mode === "fund") fundPreview();
+  }
+  function focusEntry() { el.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" }); typeBtns[0].focus(); }
+  return { el, refresh, focusEntry };
 }
 function confirmInline(container, question, yes, onYes, onDone) {
   let t;
@@ -301,6 +446,9 @@ function fillSettingsForm() {
   if (document.activeElement !== t) t.value = state.settings.title || "";
   if (document.activeElement !== s) s.value = state.settings.subtitle || "";
   $("set-hidden").checked = !!state.settings.hidden;
+  const st = $("set-stations"), n = stationsN();
+  if (document.activeElement !== st) st.value = String(n);
+  $("stations-note").textContent = `Each station is worth ${fmt(HUB_TOTAL / n)} pts for a full delegation; all ${n} stations = ${fmt(HUB_TOTAL)} pts. Fundraiser: 100% = ${fmt(FUND_TOTAL)} pts.`;
 }
 
 /* ---------- writes (atomic increments, so two organisers tapping at once never lose points) ---------- */
@@ -320,15 +468,72 @@ async function flush(id) {
   flushing.add(id); pending.delete(id);
   const p = updateDoc(gref(id), { points: increment(d), updatedAt: Date.now() });
   renderAdmin();
-  try { await p; addLog(`${d > 0 ? "+" : "−"}${fmt(Math.abs(d))} to ${g.name}`); }
+  try { await p; addLog(`Bonus ${signed(d)} to ${g.name}`); }
   catch (e) { toast(errMsg(e)); }
   flushing.delete(id); renderAdmin();
   if (pending.get(id)) flush(id);
 }
-async function setPoints(id, v) {
+// Hub activity: recording a station replaces that station's earlier entry, so only the difference is added
+async function recordHub(id, station, count) {
+  if (!need()) return false; const g = state.groups.get(id); if (!g) return false;
+  const prev = (g.hub || {})["s" + station];
+  const delta = hubPoints(g, g.size, stationsN(), { ...(g.hub || {}), ["s" + station]: count }) - hubPoints(g);
+  try {
+    await updateDoc(gref(id), { ["hub.s" + station]: count, points: increment(delta), updatedAt: Date.now() });
+    addLog(`Hub · Station ${station}: ${count}/${g.size} of ${g.name}${typeof prev === "number" ? ` (was ${prev})` : ""} → ${signed(delta)}`);
+    toast(`${g.name}: station ${station} recorded, ${signed(delta)} pts.`);
+    return true;
+  } catch (e) { toast(errMsg(e)); return false; }
+}
+async function clearHub(id, station) {
   if (!need()) return; const g = state.groups.get(id); if (!g) return;
-  try { await updateDoc(gref(id), { points: v, updatedAt: Date.now() }); addLog(`${g.name} set to ${fmt(v)}`); }
-  catch (e) { toast(errMsg(e)); }
+  const hub = { ...(g.hub || {}) }; delete hub["s" + station];
+  const delta = hubPoints(g, g.size, stationsN(), hub) - hubPoints(g);
+  try {
+    await updateDoc(gref(id), { ["hub.s" + station]: deleteField(), points: increment(delta), updatedAt: Date.now() });
+    addLog(`Hub · Station ${station} cleared for ${g.name} → ${signed(delta)}`); toast(`Station ${station} cleared for ${g.name}.`);
+  } catch (e) { toast(errMsg(e)); }
+}
+// Fundraiser: store the % raised; award only the change since the last update
+async function updateFund(id, pct) {
+  if (!need()) return false; const g = state.groups.get(id); if (!g) return false;
+  const old = g.fundPct || 0;
+  const delta = fundPoints(pct) - fundPoints(old);
+  try {
+    await updateDoc(gref(id), { fundPct: pct, points: increment(delta), updatedAt: Date.now() });
+    addLog(`Fundraiser · ${g.name}: ${fmt(old)}% → ${fmt(pct)}% → ${signed(delta)}`);
+    toast(`${g.name}: fundraiser at ${fmt(pct)}%, ${signed(delta)} pts.`);
+    return true;
+  } catch (e) { toast(errMsg(e)); return false; }
+}
+// Delegation size changes the value of every hub entry already recorded for that team
+async function setSize(id, size) {
+  if (!need()) return false; const g = state.groups.get(id); if (!g) return false;
+  const over = Object.entries(g.hub || {}).find(([, c]) => typeof c === "number" && c > size);
+  if (over) { toast(`${over[0].replace("s", "Station ")} recorded ${over[1]} delegates, more than ${size}. Fix that station first.`); return false; }
+  const delta = hubPoints(g, size) - hubPoints(g);
+  try {
+    await updateDoc(gref(id), { size, points: increment(delta), updatedAt: Date.now() });
+    addLog(`Delegation size for ${g.name}: ${g.size || "not set"} → ${size}${Math.abs(delta) > 0.001 ? ` (hub ${signed(delta)})` : ""}`);
+    toast(`${g.name} now has ${size} delegates.`);
+    return true;
+  } catch (e) { toast(errMsg(e)); return false; }
+}
+// Changing the number of hub stations re-values every team's hub points in one batch
+async function setStations(n) {
+  if (!need()) return;
+  const old = stationsN(); if (n === old) return toast(`Already set to ${n} stations.`);
+  try {
+    const b = writeBatch(db);
+    b.set(doc(db, "meta", "settings"), { ...state.settings, stations: n });
+    for (const g of state.groups.values()) {
+      const delta = hubPoints(g, g.size, n) - hubPoints(g, g.size, old);
+      if (Math.abs(delta) > 1e-9) b.update(gref(g.id), { points: increment(delta), updatedAt: Date.now() });
+    }
+    await b.commit();
+    addLog(`Hub stations: ${old} → ${n} (every team's hub points recalculated)`);
+    toast(`Hub stations set to ${n}. Scores recalculated.`);
+  } catch (e) { toast(errMsg(e)); fillSettingsForm(); }
 }
 async function renameGroup(id, name) {
   const g = state.groups.get(id); const old = g ? g.name : "";
@@ -347,8 +552,8 @@ async function resetScores() {
   if (!need()) return;
   try {
     const b = writeBatch(db);
-    for (const g of state.groups.values()) b.update(gref(g.id), { points: 0, updatedAt: Date.now() });
-    await b.commit(); addLog("All scores reset to 0"); toast("All scores reset.");
+    for (const g of state.groups.values()) b.update(gref(g.id), { points: 0, hub: deleteField(), fundPct: 0, updatedAt: Date.now() });
+    await b.commit(); addLog("All scores reset to 0 (hub and fundraiser records cleared)"); toast("All scores reset.");
   } catch (e) { toast(errMsg(e)); }
 }
 async function removeAll() {
@@ -372,12 +577,14 @@ $("add-form").addEventListener("submit", async (e) => {
   e.preventDefault(); if (!need()) return;
   const name = $("add-name").value.trim(); if (!name) return toast("Give the group a name.");
   const pts = Math.round(Number($("add-points").value) || 0);
+  const size = Number($("add-size").value);
+  if (!Number.isInteger(size) || size < 1 || size > 100) return toast("Enter the delegation size: how many people are in this team (1 to 100).");
   if ([...state.groups.values()].some(g => g.name.toLowerCase() === name.toLowerCase())) return toast("A group with that name already exists.");
   const btn = $("add-btn"); btn.disabled = true;
   try {
-    await addDoc(collection(db, "groups"), { name, points: pts, color: addColor, createdAt: Date.now(), updatedAt: Date.now() });
-    addLog(`Added ${name}${pts ? " with " + fmt(pts) + " pts" : ""}`);
-    $("add-name").value = ""; $("add-points").value = "0";
+    await addDoc(collection(db, "groups"), { name, points: pts, size, fundPct: 0, hub: {}, color: addColor, createdAt: Date.now(), updatedAt: Date.now() });
+    addLog(`Added ${name} (${size} delegates)${pts ? " with " + fmt(pts) + " bonus pts" : ""}`);
+    $("add-name").value = ""; $("add-points").value = "0"; $("add-size").value = "";
     addColor = COLORS[(COLORS.indexOf(addColor) + 1) % COLORS.length]; renderSwatches();
     toast(`Added ${name}.`); $("add-name").focus();
   } catch (err) { toast(errMsg(err)); }
@@ -386,6 +593,12 @@ $("add-form").addEventListener("submit", async (e) => {
 $("settings-form").addEventListener("submit", (e) => {
   e.preventDefault();
   saveSettings({ title: $("set-title").value.trim() || "Congress 2026", subtitle: $("set-sub").value.trim() }, "Settings saved.");
+});
+$("hub-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const n = Number($("set-stations").value);
+  if (!Number.isInteger(n) || n < 1 || n > 50) return toast("Number of stations must be a whole number from 1 to 50.");
+  setStations(n);
 });
 $("set-hidden").addEventListener("change", (e) => {
   const hidden = e.target.checked;
@@ -489,7 +702,12 @@ function start() {
     const next = new Map();
     for (const d of snap.docs) {
       const x = d.data() || {};
-      const g = { id: d.id, name: String(x.name || "Unnamed group"), points: Number(x.points) || 0, color: x.color, createdAt: Number(x.createdAt) || 0 };
+      const g = {
+        id: d.id, name: String(x.name || "Unnamed group"), points: Number(x.points) || 0, color: x.color, createdAt: Number(x.createdAt) || 0,
+        size: Number.isInteger(x.size) && x.size > 0 ? x.size : 0,
+        hub: x.hub && typeof x.hub === "object" ? x.hub : {},
+        fundPct: Number(x.fundPct) || 0,
+      };
       const old = state.groups.get(d.id);
       if (state.loaded && old && old.points !== g.points) events.set(d.id, g.points - old.points);
       next.set(d.id, g);
@@ -503,7 +721,10 @@ function start() {
 
   onSnapshot(doc(db, "meta", "settings"), (d) => {
     const x = (d.exists() && d.data()) || {};
-    state.settings = { title: x.title || "Congress 2026", subtitle: x.subtitle != null ? x.subtitle : "Live standings", hidden: !!x.hidden };
+    state.settings = {
+      title: x.title || "Congress 2026", subtitle: x.subtitle != null ? x.subtitle : "Live standings", hidden: !!x.hidden,
+      stations: Number.isInteger(x.stations) && x.stations > 0 ? x.stations : 8,
+    };
     renderAll();
   }, () => {});
 

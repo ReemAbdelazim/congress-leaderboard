@@ -132,19 +132,34 @@
           <div class="panel">
             <h2>Add a group</h2>
             <form id="add-form" autocomplete="off">
-              <div class="form-grid">
+              <label class="lbl" for="add-name">Group name</label>
+              <input class="field" id="add-name" maxlength="60" placeholder="e.g. Team Cedar" required>
+              <div class="form-grid" style="margin-top:12px">
                 <div>
-                  <label class="lbl" for="add-name">Group name</label>
-                  <input class="field" id="add-name" maxlength="60" placeholder="e.g. Team Cedar" required>
+                  <label class="lbl" for="add-size">Delegation size (people)</label>
+                  <input class="field" id="add-size" type="number" min="1" max="100" step="1" placeholder="e.g. 5" required>
                 </div>
                 <div>
-                  <label class="lbl" for="add-points">Starting pts</label>
+                  <label class="lbl" for="add-points">Starting bonus</label>
                   <input class="field" id="add-points" type="number" step="1" value="0">
                 </div>
               </div>
               <label class="lbl" style="margin-top:14px">Colour</label>
               <div class="swatches" id="add-swatches"></div>
               <div class="actions" style="margin-top:16px"><button class="btn primary" type="submit" id="add-btn">Add group</button></div>
+            </form>
+          </div>
+
+          <div class="panel">
+            <h2>Scoring</h2>
+            <form id="hub-form" autocomplete="off">
+              <label class="lbl" for="set-stations">Number of hub stations</label>
+              <div class="row2">
+                <input class="field" id="set-stations" type="number" min="1" max="50" step="1" style="max-width:120px">
+                <button class="btn" type="submit">Save stations</button>
+              </div>
+              <p class="hint" id="stations-note" style="margin:10px 0 0"></p>
+              <p class="hint" style="margin:6px 0 0">Changing this recalculates every team's hub points straight away.</p>
             </form>
           </div>
 
