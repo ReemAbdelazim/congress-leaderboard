@@ -639,10 +639,16 @@ $("set-hidden").addEventListener("change", (e) => {
 });
 
 /* ---------- views ---------- */
-const viewFromHash = () => ({ "#admin": "admin", "#stations": "stations" })[location.hash] || "board";
+// Sign-in lives only at /sign-in: that page hands over with #signin. The main page never offers it,
+// so #admin or #stations shows the leaderboard to anyone who isn't a signed-in organiser or volunteer.
+const ROOT = location.pathname.replace(/sign-in\/?$/, "");
+let signinFlow = location.hash === "#signin";
+const viewFromHash = () => ({ "#admin": "admin", "#stations": "stations", "#signin": "admin" })[location.hash] || "board";
 function setView(v) {
+  state.requested = v;   // remembered so the view can be restored once sign-in finishes loading
   state.view = ["admin", "stations"].includes(v) ? v : "board";
   if (state.view === "stations" && isVol()) state.view = "admin";   // Stations is organisers only
+  if (state.view !== "board" && !canHub() && !signinFlow) state.view = "board";
   const organiserOnly = state.view !== "board";
   document.body.classList.toggle("volunteer", isVol());
   $("view-board").hidden = organiserOnly;
@@ -652,17 +658,16 @@ function setView(v) {
   $("tabs").hidden = !canHub();
   $("tab-stations").hidden = !state.isAdmin;
   $("tab-admin").textContent = isVol() ? "Hub points" : "Admin";
-  $("organiser-link").hidden = canHub();
   for (const t of ["board", "admin", "stations"]) $("tab-" + t).setAttribute("aria-selected", String(state.view === t));
-  try { history.replaceState(null, "", organiserOnly ? "#" + state.view : location.pathname + location.search); } catch (e) {}
+  const url = organiserOnly && !canHub() ? ROOT + "sign-in" : organiserOnly ? ROOT + "#" + state.view : ROOT;
+  try { history.replaceState(null, "", url); } catch (e) {}
   renderAll();
 }
 $("tab-board").addEventListener("click", () => setView("board"));
 $("tab-admin").addEventListener("click", () => setView("admin"));
 $("tab-stations").addEventListener("click", () => setView("stations"));
-$("organiser-link").addEventListener("click", () => setView("admin"));
-$("back-board").addEventListener("click", () => setView("board"));
-window.addEventListener("hashchange", () => setView(viewFromHash()));
+$("back-board").addEventListener("click", () => { signinFlow = false; setView("board"); });
+window.addEventListener("hashchange", () => { if (location.hash === "#signin") signinFlow = true; setView(viewFromHash()); });
 
 /* ---------- stations tab ---------- */
 const nameDirty = new Set();   // stations whose name field has unsaved edits
@@ -808,8 +813,8 @@ async function checkAdmin(user) {
     }, () => {});
   }
   if (user && !role && state.view !== "board") toast("This account doesn't have organiser or volunteer access yet.");
-  else if (role && wantRole && role !== wantRole) toast(`This account has ${ROLE_INFO[role].label.toLowerCase()} access, so you're signed in as ${ROLE_INFO[role].article}.`);
-  setView(state.view);
+  else if (signinFlow && role && wantRole && role !== wantRole) toast(`This account has ${ROLE_INFO[role].label.toLowerCase()} access, so you're signed in as ${ROLE_INFO[role].article}.`);
+  setView(state.requested ?? state.view);
 }
 
 /* ---------- live connection ---------- */
@@ -822,8 +827,7 @@ function start() {
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
   auth = getAuth(app);
-  state.view = viewFromHash();
-  setView(state.view);
+  setView(viewFromHash());
 
   onSnapshot(collection(db, "groups"), { includeMetadataChanges: true }, (snap) => {
     const events = new Map();
