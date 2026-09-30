@@ -2,11 +2,16 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // An organiser is a signed-in account whose user ID has a document in /admins.
-    // Add organisers in the Firebase console: Firestore → admins → Add document (ID = their user ID).
+    // Organisers: signed-in accounts whose user ID has a document in /admins (full control).
+    // Volunteers: signed-in accounts whose user ID has a document in /volunteers (hub activity only).
+    // Add people in the Firebase console: Firestore → admins or volunteers → Add document (ID = their user ID, field `name`).
     function isAdmin() {
       return request.auth != null
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    function isVolunteer() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/volunteers/$(request.auth.uid));
     }
 
     function validGroup() {
@@ -16,10 +21,36 @@ service cloud.firestore {
         && (!('color' in d) || (d.color is string && d.color.size() <= 9));
     }
 
+    function stationCount() {
+      let path = /databases/$(database)/documents/meta/settings;
+      return exists(path) ? get(path).data.get('stations', 8) : 8;
+    }
+
+    // A volunteer may record one hub station for one team, and the points must change
+    // by exactly what the hub formula gives. Nothing else about the team can change.
+    function validHubEntry() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let st = after.lastStation;
+      let n = stationCount();
+      let size = before.size;
+      let c = after.hub[st];
+      let o = before.get('hub', {}).get(st, 0);
+      return after.diff(before).affectedKeys().hasOnly(['hub', 'points', 'updatedAt', 'lastStation'])
+        && st is string && st.matches('s[0-9]{1,2}')
+        && int(st.replace('s', '')) >= 1 && int(st.replace('s', '')) <= n
+        && after.hub.diff(before.get('hub', {})).affectedKeys().hasOnly([st])
+        && size is int && size > 0
+        && c is int && c >= 0 && c <= size
+        && o is int
+        && math.abs(after.points - before.points - (c - o) * 1000.0 / (size * n)) < 0.01;
+    }
+
     // Public: anyone can read groups and board settings
     match /groups/{groupId} {
       allow read: if true;
-      allow create, update: if isAdmin() && validGroup();
+      allow create: if isAdmin() && validGroup();
+      allow update: if (isAdmin() && validGroup()) || (isVolunteer() && validHubEntry());
       allow delete: if isAdmin();
     }
 
@@ -28,13 +59,18 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Change log: organisers only
+    // Change log: organisers and volunteers read it and add to it; only organisers delete
     match /log/{entryId} {
-      allow read, create, delete: if isAdmin();
+      allow read, create: if isAdmin() || isVolunteer();
+      allow delete: if isAdmin();
     }
 
-    // Each person may check only their own organiser record; nobody can write it from the site
+    // Each person may check only their own role record; nobody can write roles from the site
     match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+    match /volunteers/{uid} {
       allow read: if request.auth != null && request.auth.uid == uid;
       allow write: if false;
     }

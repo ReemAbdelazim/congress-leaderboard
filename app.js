@@ -26,8 +26,12 @@ const flushing = new Set();
 const prevRank = new Map();
 const moves = new Map();        // id -> {dir, n, until}
 let addColor = COLORS[0];
+const LOG_LIMIT = 500;           // Recent changes keeps the latest 500 entries (scrollable)
 
 const $ = (id) => document.getElementById(id);
+// Roles: "admin" (organisers, full control) or "volunteer" (hub activity only). The Firestore rules enforce the same limits.
+const isVol = () => state.role === "volunteer";
+const canHub = () => state.role === "admin" || state.role === "volunteer";
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
   if (attrs) for (const [k, v] of Object.entries(attrs)) {
@@ -72,7 +76,7 @@ let toastT;
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 3200); }
 function errMsg(e) {
   const c = e && e.code;
-  if (c === "permission-denied") return "That change wasn't saved: this account isn't an organiser.";
+  if (c === "permission-denied") return "That change wasn't saved: this account doesn't have permission to make it.";
   if (c === "resource-exhausted") return "The free daily limit was reached. Try again later or upgrade the Firebase plan.";
   if (c === "unavailable") return "You're offline. The change will save when the connection returns.";
   return "That change wasn't saved. Check your connection and try again.";
@@ -210,7 +214,7 @@ function adminMatches() {
   return [...state.groups.values()].filter(g => !q || norm(g.name).includes(q));
 }
 function renderAdmin() {
-  if (!state.isAdmin) return;
+  if (!canHub()) return;
   const wrap = $("a-list");
   const q = norm($("a-search").value);
   const sort = $("a-sort").value;
@@ -249,7 +253,7 @@ $("a-search").addEventListener("keydown", (e) => {
   }
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "/" || state.view !== "admin" || !state.isAdmin) return;
+  if (e.key !== "/" || state.view !== "admin" || !canHub()) return;
   const t = e.target; if (t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
   e.preventDefault(); $("a-search").focus(); $("a-search").select();
 });
@@ -285,7 +289,8 @@ function buildAdminRow(id) {
   const hubPrev = h("div", { class: "preview" });
   const hubBtn = h("button", { class: "btn primary", type: "button", text: "Record", onclick: () => doHub() });
   const clearBtn = h("button", { class: "btn ghost", type: "button", text: "Clear station", hidden: true, onclick: () => clearHub(id, Number(stSel.value)) });
-  const sizeNote = h("div", { class: "preview warn", hidden: true }, "Set this team's delegation size first. ", h("button", { class: "linkbtn", type: "button", text: "Set delegation size", onclick: () => openSize() }));
+  const sizeText = h("span"), sizeLink = h("button", { class: "linkbtn", type: "button", text: "Set delegation size", onclick: () => openSize() });
+  const sizeNote = h("div", { class: "preview warn", hidden: true }, sizeText, sizeLink);
   let stTouched = false, stKey = "";
   stSel.addEventListener("change", () => { stTouched = true; hubPreview(); });
   part.addEventListener("input", hubPreview);
@@ -296,7 +301,7 @@ function buildAdminRow(id) {
     const g = G(); if (!g) return;
     const n = stationsN(), s = Number(stSel.value), size = g.size;
     const prev = (g.hub || {})["s" + s];
-    clearBtn.hidden = typeof prev !== "number";
+    clearBtn.hidden = typeof prev !== "number" || isVol();
     if (!size) { hubPrev.textContent = ""; return; }
     const perStation = HUB_TOTAL / n;
     const base = `${stationLabel(s)}: each delegate is worth ${fmt(perStation / size)} pts, full team ${fmt(perStation)} pts.`;
@@ -342,14 +347,14 @@ function buildAdminRow(id) {
   }
 
   const panes = { bonus: bonusPane, hub: hubPane, fund: fundPane };
-  function setMode(key) {
-    mode = mode === key ? null : key;
+  function setMode(key, quiet) {
+    mode = mode === key && !quiet ? null : key;
     typeBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(TYPES[i][0] === mode)));
     for (const [k, p] of Object.entries(panes)) p.hidden = k !== mode;
     const first = { bonus: amt, hub: part, fund: pct }[mode];
     if (mode === "hub") { hubPreview(); if (!G()?.size) return; }
     if (mode === "fund") fundPreview();
-    if (first) first.focus();
+    if (first && !quiet) first.focus();
   }
   function fillStations(g) {
     const n = stationsN(), hub = g.hub || {};
@@ -394,6 +399,8 @@ function buildAdminRow(id) {
     });
   }
   resetTools();
+  // Volunteers only record hub activity: no type picker, no row tools
+  if (isVol()) { types.hidden = true; tools.hidden = true; setMode("hub", true); }
 
   const el = h("div", { class: "arow" }, h("div", { class: "line1" }, rank, sw, name, pts), breakdown, types, bonusPane, hubPane, fundPane, tools);
   function refresh(g, rk, q) {
@@ -404,19 +411,25 @@ function buildAdminRow(id) {
     pts.textContent = fmt(g.points + p);
     pts.classList.toggle("pending", p !== 0 || flushing.has(id));
     const n = stationsN();
-    breakdown.replaceChildren(
+    breakdown.replaceChildren(...[
       h("span", { class: g.size ? "" : "warn", text: g.size ? `Delegation: ${g.size}` : "Delegation size not set" }),
-      h("span", { text: `Bonus ${fmt(bonusPoints(g) + p)}` }),
+      isVol() ? null : h("span", { text: `Bonus ${fmt(bonusPoints(g) + p)}` }),
       h("span", { text: `Hub ${fmt(hubPoints(g))} · ${stationsDone(g)}/${n} stations` }),
-      h("span", { text: `Fundraiser ${fmt(fundPoints(g.fundPct))} · ${fmt(g.fundPct || 0)}%` }));
+      isVol() ? null : h("span", { text: `Fundraiser ${fmt(fundPoints(g.fundPct))} · ${fmt(g.fundPct || 0)}%` }),
+    ].filter(Boolean));
     fillStations(g);
     sizeNote.hidden = !!g.size;
+    sizeText.textContent = isVol() ? "This team has no delegation size yet. Ask an organiser to set it before recording hub activity." : "Set this team's delegation size first. ";
+    sizeLink.hidden = isVol();
     part.max = String(g.size || 0);
     part.disabled = hubBtn.disabled = stSel.disabled = !g.size;
     if (mode === "hub") hubPreview();
     if (mode === "fund") fundPreview();
   }
-  function focusEntry() { el.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" }); typeBtns[0].focus(); }
+  function focusEntry() {
+    el.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
+    if (isVol()) (part.disabled ? stSel : part).focus(); else typeBtns[0].focus();
+  }
   return { el, refresh, focusEntry };
 }
 function confirmInline(container, question, yes, onYes, onDone) {
@@ -461,7 +474,8 @@ function fillSettingsForm() {
 
 /* ---------- writes (atomic increments, so two organisers tapping at once never lose points) ---------- */
 const gref = (id) => doc(db, "groups", id);
-function need() { if (!db || !state.isAdmin) { toast("Sign in as an organiser to make changes."); return false; } return true; }
+function need() { if (!db || !state.isAdmin) { toast(isVol() ? "Volunteers can only record hub activity." : "Sign in as an organiser to make changes."); return false; } return true; }
+function needHub() { if (!db || !canHub()) { toast("Sign in as an organiser or volunteer to record hub activity."); return false; } return true; }
 function bump(id, d, immediate) {
   if (!need()) return;
   pending.set(id, (pending.get(id) || 0) + d);
@@ -483,11 +497,12 @@ async function flush(id) {
 }
 // Hub activity: recording a station replaces that station's earlier entry, so only the difference is added
 async function recordHub(id, station, count) {
-  if (!need()) return false; const g = state.groups.get(id); if (!g) return false;
+  if (!needHub()) return false; const g = state.groups.get(id); if (!g) return false;
   const prev = (g.hub || {})["s" + station];
   const delta = hubPoints(g, g.size, stationsN(), { ...(g.hub || {}), ["s" + station]: count }) - hubPoints(g);
   try {
-    await updateDoc(gref(id), { ["hub.s" + station]: count, points: increment(delta), updatedAt: Date.now() });
+    // lastStation names the one station changed, so the Firestore rules can check a volunteer's points against the formula
+    await updateDoc(gref(id), { ["hub.s" + station]: count, points: increment(delta), lastStation: "s" + station, updatedAt: Date.now() });
     addLog(`Hub · ${stationLabel(station)}: ${count}/${g.size} of ${g.name}${typeof prev === "number" ? ` (was ${prev})` : ""} → ${signed(delta)}`);
     toast(`${g.name}: ${stationLabel(station)} recorded, ${signed(delta)} pts.`);
     return true;
@@ -627,13 +642,17 @@ $("set-hidden").addEventListener("change", (e) => {
 const viewFromHash = () => ({ "#admin": "admin", "#stations": "stations" })[location.hash] || "board";
 function setView(v) {
   state.view = ["admin", "stations"].includes(v) ? v : "board";
+  if (state.view === "stations" && isVol()) state.view = "admin";   // Stations is organisers only
   const organiserOnly = state.view !== "board";
+  document.body.classList.toggle("volunteer", isVol());
   $("view-board").hidden = organiserOnly;
-  $("view-admin").hidden = !(state.view === "admin" && state.isAdmin);
+  $("view-admin").hidden = !(state.view === "admin" && canHub());
   $("view-stations").hidden = !(state.view === "stations" && state.isAdmin);
-  $("view-signin").hidden = !(organiserOnly && !state.isAdmin);
-  $("tabs").hidden = !state.isAdmin;
-  $("organiser-link").hidden = state.isAdmin;
+  $("view-signin").hidden = !(organiserOnly && !canHub());
+  $("tabs").hidden = !canHub();
+  $("tab-stations").hidden = !state.isAdmin;
+  $("tab-admin").textContent = isVol() ? "Hub points" : "Admin";
+  $("organiser-link").hidden = canHub();
   for (const t of ["board", "admin", "stations"]) $("tab-" + t).setAttribute("aria-selected", String(state.view === t));
   try { history.replaceState(null, "", organiserOnly ? "#" + state.view : location.pathname + location.search); } catch (e) {}
   renderAll();
@@ -692,7 +711,8 @@ if (document.fullscreenEnabled) {
 }
 function renderAll(events) {
   renderBoard(events);
-  if (state.isAdmin) { renderAdmin(); fillSettingsForm(); renderStations(); }
+  if (canHub()) renderAdmin();
+  if (state.isAdmin) { fillSettingsForm(); renderStations(); }
 }
 
 /* ---------- sign in ---------- */
@@ -724,28 +744,29 @@ $("recheck-btn").addEventListener("click", () => checkAdmin(state.user));
 
 async function checkAdmin(user) {
   state.user = user;
-  let isAdmin = false;
+  let role = null, rec = null;
   if (user) {
-    try {
-      const rec = await getDoc(doc(db, "admins", user.uid));
-      isAdmin = rec.exists();
-      state.adminName = isAdmin ? adminNameFrom(rec.data()) : "";
-    } catch (e) { isAdmin = false; }
+    // Organisers are in `admins`, volunteers in `volunteers`; both keyed by account ID
+    try { rec = await getDoc(doc(db, "admins", user.uid)); if (rec.exists()) role = "admin"; } catch (e) {}
+    if (!role) { try { rec = await getDoc(doc(db, "volunteers", user.uid)); if (rec.exists()) role = "volunteer"; } catch (e) {} }
   }
-  if (!user) state.adminName = "";
+  state.adminName = role ? adminNameFrom(rec.data()) : "";
+  if (role !== state.role) { aRows.clear(); $("a-list").replaceChildren(); }   // rebuild rows for the new role
+  state.role = role;
+  const isAdmin = role === "admin";
   state.isAdmin = isAdmin;
   $("signin-out").hidden = !!user;
-  $("signin-pending").hidden = !user || isAdmin;
+  $("signin-pending").hidden = !user || !!role;
   if (user) { $("si-who").textContent = user.email || "this account"; $("si-uid").textContent = user.uid; }
-  $("admin-who").textContent = user ? "Signed in as " + (state.adminName ? `${state.adminName} (${user.email || user.uid})` : (user.email || user.uid)) : "";
+  $("admin-who").textContent = user ? "Signed in as " + (state.adminName ? `${state.adminName} (${user.email || user.uid})` : (user.email || user.uid)) + (role === "volunteer" ? " · Volunteer" : role === "admin" ? " · Organiser" : "") : "";
   if (unsubLog) { unsubLog(); unsubLog = null; }
-  if (isAdmin) {
-    unsubLog = onSnapshot(query(collection(db, "log"), orderBy("t", "desc"), limit(30)), (snap) => {
+  if (role) {
+    unsubLog = onSnapshot(query(collection(db, "log"), orderBy("t", "desc"), limit(LOG_LIMIT)), (snap) => {
       state.log = snap.docs.map(d => d.data()).filter(e => typeof e.text === "string");
       renderLog();
     }, () => {});
   }
-  if (user && !isAdmin && state.view !== "board") toast("This account isn't an organiser yet.");
+  if (user && !role && state.view !== "board") toast("This account doesn't have organiser or volunteer access yet.");
   setView(state.view);
 }
 

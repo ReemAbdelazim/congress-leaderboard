@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600&family=Montserrat:wght@500;600;700;800&display=swap">
-<link rel="stylesheet" href="styles.css?v=2026-09-30c">
+<link rel="stylesheet" href="styles.css?v=2026-10-01">
 </head>
 <body>
 <div class="rings" aria-hidden="true">
@@ -67,9 +67,9 @@
     <!-- Shown when someone opens the Admin view but isn't a signed-in organiser -->
     <section id="view-signin" hidden>
       <div class="panel signin">
-        <h2>Organiser sign in</h2>
+        <h2>Organiser &amp; volunteer sign in</h2>
         <div id="signin-out">
-          <p class="hint">Only organisers can add groups and change scores. Everyone else can watch the leaderboard without signing in.</p>
+          <p class="hint">Only organisers and hub volunteers can change scores. Everyone else can watch the leaderboard without signing in.</p>
           <div class="stack">
             <button class="btn primary" type="button" id="google-btn">Sign in with Google</button>
           </div>
@@ -87,8 +87,8 @@
           </form>
         </div>
         <div id="signin-pending" hidden>
-          <p class="hint">You're signed in as <strong id="si-who"></strong>, but this account isn't an organiser yet.</p>
-          <label class="lbl">Send this account ID to the leaderboard owner so they can add you:</label>
+          <p class="hint">You're signed in as <strong id="si-who"></strong>, but this account doesn't have organiser or volunteer access yet.</p>
+          <label class="lbl">Send this account ID to an organiser so they can add you:</label>
           <div class="uid" id="si-uid"></div>
           <div class="actions" style="margin-top:14px">
             <button class="btn" type="button" id="copy-uid">Copy ID</button>
@@ -111,7 +111,8 @@
         <div class="col">
           <div class="panel">
             <h2>Scores</h2>
-            <p class="hint">Changes go live on every screen right away. Quick taps are grouped into one update.</p>
+            <p class="hint admin-only">Changes go live on every screen right away. Quick taps are grouped into one update.</p>
+            <p class="hint volunteer-only">Pick the team, choose the station and enter how many delegates took part. Points go live on every screen right away.</p>
             <div class="search-bar">
               <div class="search-row">
                 <div class="search">
@@ -130,7 +131,7 @@
           </div>
         </div>
         <div class="col">
-          <div class="panel">
+          <div class="panel admin-only">
             <h2>Add a group</h2>
             <form id="add-form" autocomplete="off">
               <label class="lbl" for="add-name">Group name</label>
@@ -151,7 +152,7 @@
             </form>
           </div>
 
-          <div class="panel">
+          <div class="panel admin-only">
             <h2>Board settings</h2>
             <form id="settings-form" autocomplete="off">
               <label class="lbl" for="set-title">Title</label>
@@ -171,7 +172,7 @@
             <ul class="log" id="a-log"></ul>
           </div>
 
-          <div class="panel">
+          <div class="panel admin-only">
             <h2>Reset</h2>
             <div class="actions" id="danger"></div>
           </div>
@@ -216,11 +217,11 @@
 
   <footer>
     <span>Your decision to make, your action to take.</span>
-    <button class="linkish" type="button" id="organiser-link">Organiser sign in</button>
+    <button class="linkish" type="button" id="organiser-link">Organiser &amp; volunteer sign in</button>
   </footer>
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
 
-<script type="module" src="app.js?v=2026-09-30c"></script>
+<script type="module" src="app.js?v=2026-10-01"></script>
 </body>
 </html>
