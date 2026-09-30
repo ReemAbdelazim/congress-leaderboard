@@ -429,7 +429,12 @@ function confirmInline(container, question, yes, onYes, onDone) {
 function renderLog() {
   const ul = $("a-log");
   if (!state.log.length) return ul.replaceChildren(h("li", { class: "empty-note", text: "Nothing yet." }));
-  ul.replaceChildren(...state.log.map(e => h("li", null, h("time", { text: new Date(e.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }), h("span", { text: e.text }))));
+  ul.replaceChildren(...state.log.map(e => {
+    const who = (typeof e.byName === "string" && e.byName) || (typeof e.by === "string" && e.by) || "";
+    return h("li", null,
+      h("time", { text: new Date(e.t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }),
+      h("div", { class: "log-body" }, h("span", { text: e.text }), who ? h("span", { class: "log-by", text: "by " + who }) : null));
+  }));
 }
 function renderDanger() {
   const d = $("danger");
@@ -566,8 +571,17 @@ async function removeAll() {
     await b.commit(); addLog("All groups removed"); toast("All groups removed.");
   } catch (e) { toast(errMsg(e)); }
 }
+// The organiser's display name comes from their record in the `admins` collection
+function adminNameFrom(d) {
+  if (!d) return "";
+  const direct = d.name ?? d.Name ?? d.fullName ?? d.displayName;
+  if (typeof direct === "string" && direct.trim()) return direct.trim().slice(0, 60);
+  const anyText = Object.values(d).find(v => typeof v === "string" && v.trim() && !v.includes("@"));
+  return anyText ? anyText.trim().slice(0, 60) : "";
+}
+const whoAmI = () => state.adminName || (state.user ? (state.user.displayName || state.user.email || "An organiser") : "");
 function addLog(text) {
-  addDoc(collection(db, "log"), { t: Date.now(), text, by: state.user ? (state.user.email || state.user.uid) : "" }).catch(() => {});
+  addDoc(collection(db, "log"), { t: Date.now(), text, byName: whoAmI(), by: state.user ? (state.user.email || state.user.uid) : "" }).catch(() => {});
 }
 async function saveSettings(patch, msg) {
   if (!need()) return;
@@ -711,13 +725,18 @@ async function checkAdmin(user) {
   state.user = user;
   let isAdmin = false;
   if (user) {
-    try { isAdmin = (await getDoc(doc(db, "admins", user.uid))).exists(); } catch (e) { isAdmin = false; }
+    try {
+      const rec = await getDoc(doc(db, "admins", user.uid));
+      isAdmin = rec.exists();
+      state.adminName = isAdmin ? adminNameFrom(rec.data()) : "";
+    } catch (e) { isAdmin = false; }
   }
+  if (!user) state.adminName = "";
   state.isAdmin = isAdmin;
   $("signin-out").hidden = !!user;
   $("signin-pending").hidden = !user || isAdmin;
   if (user) { $("si-who").textContent = user.email || "this account"; $("si-uid").textContent = user.uid; }
-  $("admin-who").textContent = user ? "Signed in as " + (user.email || user.uid) : "";
+  $("admin-who").textContent = user ? "Signed in as " + (state.adminName ? `${state.adminName} (${user.email || user.uid})` : (user.email || user.uid)) : "";
   if (unsubLog) { unsubLog(); unsubLog = null; }
   if (isAdmin) {
     unsubLog = onSnapshot(query(collection(db, "log"), orderBy("t", "desc"), limit(30)), (snap) => {
