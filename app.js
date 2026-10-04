@@ -84,7 +84,6 @@ function campaignUrl(link) {
   try { const u = new URL(String(link || "").trim()); if (!/^https?:$/.test(u.protocol)) return ""; u.search = ""; u.hash = ""; return u.toString(); }
   catch (e) { return ""; }
 }
-const campaignsOf = (gid) => [...new Set(rosterOf(gid).map(d => campaignUrl(d.link)).filter(Boolean))];
 function shortNames(ids) {
   const names = ids.map(x => state.delegates.get(x)).filter(Boolean).map(d => d.first ? d.first + (d.last ? " " + d.last[0] + "." : "") : fullName(d));
   return names.length > 6 ? names.slice(0, 6).join(", ") + ` +${names.length - 6} more` : names.join(", ");
@@ -408,8 +407,7 @@ function buildAdminRow(id) {
   };
   pct.addEventListener("input", fundPreview);
   pct.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fundGo(); } });
-  // LaunchGood blocks automated reading, so organisers open the page and enter $ raised and $ goal; the % is worked out here
-  const fundLinks = h("div", { class: "fund-links" });
+  // Optional: enter $ raised and $ goal and the % is worked out here
   const raised = h("input", { class: "field", type: "number", min: "0", step: "0.01", id: "fr-" + id, placeholder: "$ raised", "aria-label": "Amount raised" });
   const goal = h("input", { class: "field", type: "number", min: "0", step: "0.01", id: "fg-" + id, placeholder: "$ goal", "aria-label": "Fundraising goal" });
   const calc = () => {
@@ -419,15 +417,10 @@ function buildAdminRow(id) {
   raised.addEventListener("input", calc); goal.addEventListener("input", calc);
   raised.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fundGo(); } });
   goal.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fundGo(); } });
-  const fundPane = h("div", { class: "pane", hidden: true }, fundLinks,
+  const fundPane = h("div", { class: "pane", hidden: true },
     h("div", { class: "row2" }, raised, h("span", { class: "of", text: "of" }), goal),
     h("div", { class: "row2" }, h("div", { class: "pct" }, pct, h("span", { text: "%" })), h("button", { class: "btn primary", type: "button", text: "Update fundraiser", onclick: fundGo })), fundPrev);
-  function renderFundLinks() {
-    const urls = campaignsOf(id);
-    fundLinks.replaceChildren(...(urls.length
-      ? [h("span", { class: "lbl", text: urls.length > 1 ? "Fundraiser pages" : "Fundraiser page" }),
-         ...urls.map((u, i) => h("a", { class: "btn ghost", href: u, target: "_blank", rel: "noopener", text: urls.length > 1 ? `Open LaunchGood page ${i + 1} ↗` : "Open LaunchGood page ↗" }))]
-      : [h("span", { class: "hint", text: "No fundraiser link on this team's delegates. Enter the % or the amounts below." })]));
+  function prefillGoal() {
     const g = G(); if (g && g.fundGoal && document.activeElement !== goal && goal.value === "") goal.value = String(g.fundGoal);
   }
   function fundPreview() {
@@ -447,7 +440,7 @@ function buildAdminRow(id) {
     typeBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(TYPES[i][0] === mode)));
     for (const [k, p] of Object.entries(panes)) p.hidden = k !== mode;
     const first = { bonus: amt, hub: useList() ? null : part, fund: raised }[mode];
-    if (mode === "fund") renderFundLinks();
+    if (mode === "fund") prefillGoal();
     if (mode === "hub") { hubPreview(); if (!G()?.size) return; }
     if (mode === "fund") fundPreview();
     if (first && !quiet) first.focus();
@@ -470,36 +463,33 @@ function buildAdminRow(id) {
   const rosterList = h("ul", { class: "roster" });
   const dFirst = h("input", { class: "field", id: "df-" + id, maxlength: "60", placeholder: "First name", "aria-label": "First name" });
   const dLast = h("input", { class: "field", id: "dl-" + id, maxlength: "60", placeholder: "Last name", "aria-label": "Last name" });
-  const dLink = h("input", { class: "field", id: "dk-" + id, type: "url", maxlength: "500", placeholder: "Fundraiser link (optional)", "aria-label": "Fundraiser link" });
   const numIn = h("input", { class: "field", id: "dn-" + id, maxlength: "20", placeholder: "e.g. 12", "aria-label": "Delegation number" });
   const sizeSync = h("div", { class: "preview" });
   const addDel = async () => {
-    const first = dFirst.value.trim(), last = dLast.value.trim(), link = dLink.value.trim();
+    const first = dFirst.value.trim(), last = dLast.value.trim();
     if (!first && !last) return toast("Enter the delegate's first or last name.");
-    if (link && !campaignUrl(link)) return toast("The fundraiser link should start with https://");
-    if (await addDelegate(id, first, last, link)) { dFirst.value = dLast.value = dLink.value = ""; dFirst.focus(); }
+    if (await addDelegate(id, first, last, "")) { dFirst.value = dLast.value = ""; dFirst.focus(); }
   };
-  [dFirst, dLast, dLink].forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addDel(); } }));
+  [dFirst, dLast].forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addDel(); } }));
   numIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); saveNum(); } });
   const saveNum = () => { const g = G(); if (g && numIn.value.trim() !== g.number) setNumber(id, numIn.value.trim()); };
   const rosterPane = h("div", { class: "pane", hidden: true },
     h("div", { class: "row2" }, h("label", { class: "lbl", for: numIn.id, text: "Delegation number" }), numIn, h("button", { class: "btn", type: "button", text: "Save number", onclick: saveNum })),
     sizeSync, rosterList,
-    h("div", { class: "row2 add-del" }, dFirst, dLast, dLink, h("button", { class: "btn primary", type: "button", text: "Add delegate", onclick: addDel })));
+    h("div", { class: "row2 add-del" }, dFirst, dLast, h("button", { class: "btn primary", type: "button", text: "Add delegate", onclick: addDel })));
   let rosterKey = "";
   function renderRoster(force) {
     const g = G(); if (!g) return;
     const roster = rosterOf(id);
-    const key = roster.map(d => d.id + fullName(d) + (d.link || "")).join("|") + "|" + g.size;
+    const key = roster.map(d => d.id + fullName(d)).join("|") + "|" + g.size;
     if (document.activeElement !== numIn) numIn.value = g.number || "";
     if (key === rosterKey && !force) return;
     rosterKey = key;
     rosterList.replaceChildren(...(roster.length ? roster.map(d => {
       const li = h("li");
-      const linkEl = campaignUrl(d.link) ? h("a", { href: d.link, target: "_blank", rel: "noopener", text: "Fundraiser ↗" }) : null;
       const rm = h("button", { class: "linkbtn danger-link", type: "button", text: "Remove", "aria-label": "Remove " + fullName(d),
         onclick: () => confirmInline(li, `Remove ${fullName(d)}?`, "Remove", () => removeDelegate(d.id), () => renderRoster(true)) });
-      li.append(h("span", { class: "dn", text: fullName(d) }), linkEl || "", rm);
+      li.append(h("span", { class: "dn", text: fullName(d) }), rm);
       return li;
     }) : [h("li", { class: "empty-note", text: "No delegates listed yet. Add them below or import a CSV." })]));
     sizeSync.replaceChildren();
@@ -575,7 +565,7 @@ function buildAdminRow(id) {
     delegatesBtn.textContent = `Delegates (${listed})`;
     if (!rosterPane.hidden) renderRoster();
     if (mode === "hub") hubPreview();
-    if (mode === "fund") { renderFundLinks(); fundPreview(); }
+    if (mode === "fund") { prefillGoal(); fundPreview(); }
   }
   function focusEntry() {
     el.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });

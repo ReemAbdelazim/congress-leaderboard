@@ -78,7 +78,7 @@ Every entry in **Recent changes** shows who made it (the `name` field from `admi
 
 **Fundraiser % import** (Admin → **Import fundraiser %**): a CSV with **delegation name, percentage** (`64.4` or `64.4%`). A preview shows each team's current and new % and the points change; each listed team's % is **replaced** (points move by the difference), teams not in the file are left alone, and names that don't match a team are listed. Matching ignores capitals and punctuation ("St. Joseph" = "St Joseph").
 
-**Fundraiser:** LaunchGood blocks automated reading of its pages, so the % can't be fetched automatically. Each team shows its LaunchGood campaign link (taken from the delegates' links, without the `?src=` part); open it, type **$ raised** and **$ goal**, and the % fills in.
+**Fundraiser:** LaunchGood blocks automated reading of its pages, so the % can't be fetched automatically. Use the fundraiser % import, or on a team choose **Fundraiser** and enter the % (or **$ raised** and **$ goal** to work it out).
 
 ## Point types
 

@@ -199,14 +199,10 @@
   .roster { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 320px; overflow: auto; }
   .roster li { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: 8px; background: var(--ink); border: 1px solid var(--line); font-size: 14px; }
   .roster li .dn { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .roster li a { color: var(--mint); font-size: 12px; white-space: nowrap; }
   .roster li.empty-note { background: none; border: 0; }
   .danger-link { color: var(--danger); font-size: 12px; }
   .add-del .field { flex: 1 1 130px; width: auto; }
   .warn-text { color: var(--gold); }
-  .fund-links { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .fund-links .lbl { margin: 0; }
-  .fund-links a.btn { text-decoration: none; }
   .pane .of { color: var(--muted); font-size: 13px; }
   .csv-preview { display: grid; gap: 10px; margin-top: 12px; }
   .csv-preview:empty { display: none; }
