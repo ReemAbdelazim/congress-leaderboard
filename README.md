@@ -65,6 +65,7 @@ Every entry in **Recent changes** shows who made it (the `name` field from `admi
 | first name | last name | delegation name | delegation number | fundraiser link |
 | --- | --- | --- | --- | --- |
 
+- It also reads the registration-sheet layout: **Organization / School Name, Delegate name, Donation Link, Number of Delegates**, where the school, link and count appear only on each delegation's first row. Full names are split into first and last; the Total row is ignored; a "Number of Delegates" that doesn't match the names listed is flagged.
 - Teams are matched by delegation number, then by name. New delegations become new teams.
 - A preview shows what will happen before anything is saved. Rows with no name or no delegation are skipped and listed.
 - Anyone already on a team's list is skipped, so importing an updated file again only adds the new people.

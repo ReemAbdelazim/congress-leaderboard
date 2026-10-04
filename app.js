@@ -879,21 +879,34 @@ function parseCSV(text) {
   row.push(cell); if (row.some(c => c.trim() !== "")) rows.push(row);
   return rows.map(r => r.map(c => c.trim()));
 }
+// Recognises the column by its header. Handles both layouts:
+//  - one row per delegate with first/last name, delegation name/number and their own link
+//  - a registration sheet where the delegation name, link and "Number of Delegates" appear only on
+//    the delegation's first row, and "Delegate name" holds the full name
 function mapHeader(cells) {
   const idx = {};
   cells.forEach((raw, i) => {
-    const c = norm(raw).replace(/[_\-]+/g, " ");
+    const c = norm(raw).replace(/[_\-/]+/g, " ").replace(/\s+/g, " ").trim();
     let f = null;
     if (/(link|url|fundrais|launchgood|donat)/.test(c)) f = "link";
-    else if (/(deleg|team|group|school)/.test(c) && /(num|no\b|no\.|#|id|code)/.test(c)) f = "number";
+    else if (/(number|how many|count|#|total) of (deleg|people|members|students|participants)|(deleg|team|group) size|^size$/.test(c)) f = "size";
+    else if (/(deleg|team|group|school|organi[sz]ation)/.test(c) && /(num|no\b|no\.|#|\bid\b|code)/.test(c)) f = "number";
     else if (/^(number|num|no\.?|#|id)$/.test(c)) f = "number";
-    else if (/(deleg|team|group|school)/.test(c)) f = "team";
     else if (/(first|given|prenom)/.test(c)) f = "first";
     else if (/(last|surname|family)/.test(c)) f = "last";
+    else if (/(team|group|school|organi[sz]ation|club|chapter)/.test(c) || /^delegation( name)?$/.test(c)) f = "team";
+    else if (/(delegate|participant|student|member|full)? ?name$/.test(c)) f = "name";
     if (f && idx[f] == null) idx[f] = i;
   });
-  return Object.keys(idx).length >= 3 ? idx : null;
+  const hasPerson = idx.first != null || idx.last != null || idx.name != null;
+  return hasPerson && (idx.team != null || idx.number != null) ? idx : null;
 }
+// "Sarah Mohammad Ali" → first "Sarah", last "Mohammad Ali"; a single word stays a first name
+function splitName(full) {
+  const parts = String(full).trim().split(/\s+/).filter(Boolean);
+  return { first: parts[0] || "", last: parts.slice(1).join(" ") };
+}
+const personKey = (d) => norm(d.first + " " + d.last).replace(/[^a-z0-9]/g, "");
 let importPlan = null;
 function planImport(rows) {
   const found = mapHeader(rows[0] || []);
@@ -901,26 +914,53 @@ function planImport(rows) {
   const header = found || { first: 0, last: 1, team: 2, number: 3, link: 4 };
   const get = (r, f) => header[f] == null ? "" : String(r[header[f]] || "").trim();
   const groups = [...state.groups.values()];
-  const teams = new Map(), problems = [];
-  const keyOf = (d) => norm(d.first) + "|" + norm(d.last);
+  const teams = new Map(), problems = [], everywhere = new Map();
+  let carry = null;   // the delegation from the row above, for sheets that only fill it in once
   body.forEach((r, i) => {
     const line = i + (found ? 2 : 1);
-    const d = { first: get(r, "first").slice(0, 60), last: get(r, "last").slice(0, 60), team: get(r, "team").slice(0, 60), number: get(r, "number").slice(0, 20), link: get(r, "link").slice(0, 500) };
-    if (!d.first && !d.last) return problems.push(`Row ${line}: no first or last name, skipped.`);
-    if (!d.team && !d.number) return problems.push(`Row ${line}: no delegation name or number, skipped.`);
-    if (d.link && !campaignUrl(d.link)) { problems.push(`Row ${line}: fundraiser link isn't a web address, imported without it.`); d.link = ""; }
+    const named = header.name != null ? splitName(get(r, "name")) : null;
+    const d = {
+      first: (named ? named.first : get(r, "first")).slice(0, 60), last: (named ? named.last : get(r, "last")).slice(0, 60),
+      team: get(r, "team").slice(0, 60), number: get(r, "number").slice(0, 20), link: get(r, "link").slice(0, 500), size: get(r, "size"),
+    };
+    if (!d.first && !d.last) {
+      if (r.some(c => /^total/i.test(String(c).trim()))) return;   // the sheet's Total row
+      if (r.some(c => String(c).trim())) problems.push(`Row ${line}: no delegate name, skipped.`);
+      return;
+    }
+    const ownLink = !!d.link;   // false when the link is carried down from the delegation's first row
+    if (!d.team && !d.number) {
+      if (!carry) return problems.push(`Row ${line}: no delegation name or number, skipped.`);
+      d.team = carry.team; d.number = carry.number;
+      if (!d.link) d.link = carry.link;
+    } else carry = { team: d.team, number: d.number, link: d.link };
+    if (d.link && !campaignUrl(d.link)) {
+      if (ownLink) problems.push(`Row ${line}: fundraiser link isn't a web address, imported without it.`);
+      d.link = "";
+    } else if (ownLink && /#!|\/edit\b/.test(d.link)) problems.push(`Row ${line}: the fundraiser link for ${d.team || "#" + d.number} looks like an edit page; check it opens the public campaign.`);
     const tkey = d.number ? "#" + norm(d.number) : "n:" + norm(d.team);
     let t = teams.get(tkey);
     if (!t) {
       const existing = (d.number && groups.find(g => g.number && norm(g.number) === norm(d.number)))
         || (d.team && groups.find(g => norm(g.name) === norm(d.team) && (!g.number || !d.number)));
-      t = { name: d.team || (existing ? existing.name : `Delegation ${d.number}`), number: d.number, existing: existing || null, add: [], skipped: 0, seen: new Set(existing ? rosterOf(existing.id).map(keyOf) : []) };
+      t = { name: d.team || (existing ? existing.name : `Delegation ${d.number}`), number: d.number, existing: existing || null,
+            declared: Number.isInteger(Number(d.size)) && Number(d.size) > 0 ? Number(d.size) : null,
+            add: [], skipped: 0, listed: 0, seen: new Set(existing ? rosterOf(existing.id).map(personKey) : []) };
       teams.set(tkey, t);
     }
-    const k = keyOf(d);
+    t.listed++;
+    const k = personKey(d);
+    if (!everywhere.has(k)) everywhere.set(k, { who: [d.first, d.last].filter(Boolean).join(" "), where: new Set() });
+    everywhere.get(k).where.add(t.name);
     if (t.seen.has(k)) { t.skipped++; return; }
     t.seen.add(k); t.add.push(d);
   });
+  for (const t of teams.values()) {
+    if (t.declared && t.declared !== t.listed) problems.push(`${t.name}: the sheet says ${t.declared} delegates but lists ${t.listed}. Delegation size will be ${t.existing ? "left as it is" : t.listed}; change it on the team if needed.`);
+  }
+  for (const { who, where } of everywhere.values()) {
+    if (where.size > 1) problems.push(`${who} is listed in ${[...where].join(" and ")}. They'll be added to both; remove one if it's the same person.`);
+  }
   return { teams: [...teams.values()], problems, headerFound: !!found };
 }
 function renderImportPreview() {
