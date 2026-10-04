@@ -10,7 +10,8 @@ import { firebaseConfig } from "./firebase-config.js";
 
 const COLORS = ["#8AD09B", "#7CC4E8", "#E9C46A", "#EE8B7A", "#B9A4E8", "#5CC2B5", "#E79BC0", "#D9C7A1"];
 const state = {
-  groups: new Map(),            // id -> {id,name,points,color,createdAt}
+  groups: new Map(),            // id -> {id,name,number,points,color,createdAt,size,hub,hubPeople,fundPct}
+  delegates: new Map(),         // id -> {id,first,last,groupId,link}  (organisers and volunteers only)
   settings: { title: "Congress 2026", subtitle: "Live standings", hidden: false, stations: 8 },
   log: [],
   user: null,
@@ -19,7 +20,7 @@ const state = {
   loaded: false,
   lastUpdate: null,
 };
-let db = null, auth = null, unsubLog = null;
+let db = null, auth = null, unsubLog = null, unsubDel = null;
 const pending = new Map();      // id -> unsent delta (admin taps)
 const timers = new Map();
 const flushing = new Set();
@@ -68,6 +69,26 @@ function hubPoints(g, size = g.size, n = stationsN(), hub = g.hub) {
 const stationsDone = (g, n = stationsN()) => { let k = 0; for (let s = 1; s <= n; s++) if (typeof (g.hub || {})["s" + s] === "number") k++; return k; };
 const fundPoints = (pct) => Math.max(0, pct || 0) / 100 * FUND_TOTAL;
 const bonusPoints = (g) => g.points - hubPoints(g) - fundPoints(g.fundPct);
+
+/* ---------- delegates ----------
+   Each delegate belongs to one team (groupId). Lists come from the CSV import or are edited by organisers.
+   Delegation size follows the list (adding or removing a delegate moves it by one) unless an organiser
+   has set a different size by hand, which is then kept. */
+const fullName = (d) => [d.first, d.last].filter(Boolean).join(" ") || "Unnamed delegate";
+function rosterOf(gid) {
+  return [...state.delegates.values()].filter(d => d.groupId === gid)
+    .sort((a, b) => (a.first || "").localeCompare(b.first || "") || (a.last || "").localeCompare(b.last || ""));
+}
+// LaunchGood links carry ?src=<delegate> for attribution; the campaign page itself is the link without it
+function campaignUrl(link) {
+  try { const u = new URL(String(link || "").trim()); if (!/^https?:$/.test(u.protocol)) return ""; u.search = ""; u.hash = ""; return u.toString(); }
+  catch (e) { return ""; }
+}
+const campaignsOf = (gid) => [...new Set(rosterOf(gid).map(d => campaignUrl(d.link)).filter(Boolean))];
+function shortNames(ids) {
+  const names = ids.map(x => state.delegates.get(x)).filter(Boolean).map(d => d.first ? d.first + (d.last ? " " + d.last[0] + "." : "") : fullName(d));
+  return names.length > 6 ? names.slice(0, 6).join(", ") + ` +${names.length - 6} more` : names.join(", ");
+}
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const ordinal = (n) => { const s = ["th", "st", "nd", "rd"], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); };
 const safeColor = (c) => /^#[0-9a-fA-F]{6}$/.test(c || "") ? c : COLORS[0];
@@ -209,9 +230,15 @@ function paintName(el, name, q) {
   if (i < 0 || norm(name).length !== name.length) { el.textContent = name; return; }
   el.replaceChildren(name.slice(0, i), h("mark", { text: name.slice(i, i + q.length) }), name.slice(i + q.length));
 }
+function groupMatches(g, q) {
+  if (!q) return true;
+  if (norm(g.name).includes(q)) return true;
+  if (g.number && norm(g.number) === q.replace(/^#/, "")) return true;
+  return rosterOf(g.id).some(d => norm(fullName(d)).includes(q));
+}
 function adminMatches() {
   const q = norm($("a-search").value);
-  return [...state.groups.values()].filter(g => !q || norm(g.name).includes(q));
+  return [...state.groups.values()].filter(g => groupMatches(g, q));
 }
 function renderAdmin() {
   if (!canHub()) return;
@@ -221,6 +248,7 @@ function renderAdmin() {
   const rankOf = new Map(ranked().map(g => [g.id, g.rank]));
   const groups = [...state.groups.values()].sort(
     sort === "name" ? (a, b) => a.name.localeCompare(b.name)
+    : sort === "number" ? (a, b) => (a.number || "~").localeCompare(b.number || "~", undefined, { numeric: true }) || a.name.localeCompare(b.name)
     : sort === "points" ? (a, b) => b.points - a.points || a.name.localeCompare(b.name)
     : (a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.name.localeCompare(b.name));
   const note = wrap.querySelector(".empty-note"); if (note) note.remove();
@@ -231,7 +259,7 @@ function renderAdmin() {
   for (const g of groups) {
     let r = aRows.get(g.id);
     if (!r) { r = buildAdminRow(g.id); aRows.set(g.id, r); }
-    const match = !q || norm(g.name).includes(q);
+    const match = groupMatches(g, q);
     r.el.hidden = !match;   // hide rather than remove, so half-typed amounts survive a search
     if (match) shown++;
     r.refresh(g, rankOf.get(g.id), q);
@@ -283,31 +311,69 @@ function buildAdminRow(id) {
     }))),
     h("div", { class: "row2" }, amt, h("button", { class: "btn primary", type: "button", text: "Add bonus", onclick: bonusAdd })));
 
-  // Hub activity: station + number of delegates who took part
+  // Hub activity: pick the station, then tick the delegates who came.
+  // Teams without a delegate list fall back to entering a number (organisers only).
   const stSel = h("select", { class: "field", id: "st-" + id, "aria-label": "Station" });
   const part = h("input", { class: "field", type: "number", min: "0", step: "1", id: "hp-" + id, placeholder: "Delegates", "aria-label": "Delegates who participated" });
+  const chk = h("div", { class: "checklist", role: "group", "aria-label": "Delegates who came to this station" });
+  const allBtn = h("button", { class: "linkbtn", type: "button", text: "Tick everyone", onclick: () => toggleAll() });
+  const chkHead = h("div", { class: "chk-head" }, h("span", { class: "lbl", text: "Who came?" }), allBtn);
+  const chkWrap = h("div", { class: "chk-wrap" }, chkHead, chk);
+  const noList = h("div", { class: "preview warn", hidden: true, text: "No delegate list for this team yet. Ask an organiser to add the delegates." });
   const hubPrev = h("div", { class: "preview" });
   const hubBtn = h("button", { class: "btn primary", type: "button", text: "Record", onclick: () => doHub() });
   const clearBtn = h("button", { class: "btn ghost", type: "button", text: "Clear station", hidden: true, onclick: () => clearHub(id, Number(stSel.value)) });
   const sizeText = h("span"), sizeLink = h("button", { class: "linkbtn", type: "button", text: "Set delegation size", onclick: () => openSize() });
   const sizeNote = h("div", { class: "preview warn", hidden: true }, sizeText, sizeLink);
-  let stTouched = false, stKey = "";
-  stSel.addEventListener("change", () => { stTouched = true; hubPreview(); });
+  let stTouched = false, stKey = "", chkKey = "", chkDirty = false, checks = new Set();
+  stSel.addEventListener("change", () => { stTouched = true; chkDirty = false; renderChecklist(true); hubPreview(); });
   part.addEventListener("input", hubPreview);
   part.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); doHub(); } });
-  const hubPane = h("div", { class: "pane", hidden: true }, sizeNote,
-    h("div", { class: "row2" }, stSel, part, hubBtn, clearBtn), hubPrev);
+  const hubPane = h("div", { class: "pane", hidden: true }, sizeNote, noList,
+    h("div", { class: "row2" }, stSel, part), chkWrap, h("div", { class: "row2" }, hubBtn, clearBtn), hubPrev);
+  const useList = () => rosterOf(id).length > 0;
+  function savedPeople(g, s) { const a = (g.hubPeople || {})["s" + s]; return Array.isArray(a) ? a : null; }
+  function renderChecklist(force) {
+    const g = G(); if (!g) return;
+    const roster = rosterOf(id), s = Number(stSel.value) || 1, saved = savedPeople(g, s);
+    const key = s + "|" + roster.map(d => d.id + ":" + fullName(d)).join(",") + "|" + (saved || []).join(",");
+    if (key === chkKey && !force) return;
+    chkKey = key;
+    if (!chkDirty) checks = new Set(saved || []);
+    for (const x of [...checks]) if (!roster.some(d => d.id === x)) checks.delete(x);
+    chk.replaceChildren(...roster.map(d => {
+      const cb = h("input", { type: "checkbox", id: `ck-${id}-${d.id}` });
+      cb.checked = checks.has(d.id);
+      cb.addEventListener("change", () => { if (cb.checked) checks.add(d.id); else checks.delete(d.id); chkDirty = true; syncAllBtn(); hubPreview(); });
+      return h("label", { class: "chk", for: cb.id }, cb, h("span", { text: fullName(d) }));
+    }));
+    syncAllBtn();
+  }
+  function syncAllBtn() { const n = rosterOf(id).length; allBtn.textContent = n && checks.size === n ? "Untick everyone" : "Tick everyone"; }
+  function toggleAll() {
+    const roster = rosterOf(id), all = roster.length && checks.size === roster.length;
+    checks = all ? new Set() : new Set(roster.map(d => d.id));
+    chkDirty = true; renderChecklist(true); hubPreview();
+  }
   function hubPreview() {
     const g = G(); if (!g) return;
-    const n = stationsN(), s = Number(stSel.value), size = g.size;
+    const n = stationsN(), s = Number(stSel.value), size = g.size, list = useList();
     const prev = (g.hub || {})["s" + s];
     clearBtn.hidden = typeof prev !== "number" || isVol();
     if (!size) { hubPrev.textContent = ""; return; }
     const perStation = HUB_TOTAL / n;
     const base = `${stationLabel(s)}: each delegate is worth ${fmt(perStation / size)} pts, full team ${fmt(perStation)} pts.`;
-    const c = part.value === "" ? null : Number(part.value);
-    if (c == null) { hubPrev.textContent = base + (typeof prev === "number" ? ` Already recorded: ${prev} of ${size}.` : ""); return; }
-    if (!Number.isInteger(c) || c < 0 || c > size) { hubPrev.replaceChildren(h("span", { class: "neg", text: `Enter a whole number from 0 to ${size} (the delegation size).` })); return; }
+    let c;
+    if (list) {
+      c = checks.size;
+      if (!chkDirty && typeof prev !== "number") { hubPrev.textContent = base + " Tick who came, then Record."; return; }
+      if (!chkDirty) { hubPrev.textContent = base + ` Recorded: ${prev} of ${size}${savedPeople(g, s) ? "" : " (entered as a number earlier; ticking names replaces it)"}.`; return; }
+      if (c > size) { hubPrev.replaceChildren(h("span", { class: "neg", text: `${c} ticked, but the delegation size is ${size}. ${isVol() ? "Ask an organiser to update the size." : "Update the delegation size first."}` })); return; }
+    } else {
+      c = part.value === "" ? null : Number(part.value);
+      if (c == null) { hubPrev.textContent = base + (typeof prev === "number" ? ` Already recorded: ${prev} of ${size}.` : ""); return; }
+      if (!Number.isInteger(c) || c < 0 || c > size) { hubPrev.replaceChildren(h("span", { class: "neg", text: `Enter a whole number from 0 to ${size} (the delegation size).` })); return; }
+    }
     const delta = hubPoints(g, size, n, { ...(g.hub || {}), ["s" + s]: c }) - hubPoints(g);
     hubPrev.replaceChildren(`${c} of ${size} delegates = ${fmt(c / size * perStation)} pts`,
       typeof prev === "number" ? ` (replaces ${prev} of ${size}) ` : " ",
@@ -316,9 +382,16 @@ function buildAdminRow(id) {
   function doHub() {
     const g = G(); if (!g) return;
     if (!g.size) return toast("Set the delegation size before recording hub activity.");
+    const s = Number(stSel.value);
+    if (useList()) {
+      const people = rosterOf(id).filter(d => checks.has(d.id)).map(d => d.id);
+      if (people.length > g.size) return toast(`${people.length} ticked, but the delegation size is ${g.size}.`);
+      return recordHub(id, s, people.length, people).then(ok => { if (ok) { chkDirty = false; stTouched = false; } });
+    }
+    if (isVol()) return toast("This team has no delegate list yet. Ask an organiser to add the delegates.");
     const c = Number(part.value);
     if (part.value === "" || !Number.isInteger(c) || c < 0 || c > g.size) return toast(`Enter how many delegates took part: 0 to ${g.size}.`);
-    recordHub(id, Number(stSel.value), c).then(ok => { if (ok) { part.value = ""; stTouched = false; } });
+    recordHub(id, s, c).then(ok => { if (ok) { part.value = ""; stTouched = false; } });
   }
 
   // Fundraiser: % of goal raised so far; only the difference is awarded
@@ -329,12 +402,34 @@ function buildAdminRow(id) {
     const v = Number(pct.value);
     if (pct.value === "" || !Number.isFinite(v) || v < 0 || v > FUND_MAX_PCT) return toast(`Enter the percentage raised, from 0 to ${FUND_MAX_PCT} (above 100 is fine).`);
     if (r2(v) === r2(g.fundPct)) return toast(`${g.name} is already at ${fmt(v)}%.`);
-    updateFund(id, r2(v)).then(ok => { if (ok) { pct.value = ""; fundPreview(); } });
+    const r = Number(raised.value), gl = Number(goal.value);
+    const amounts = raised.value !== "" && gl > 0 ? { fundRaised: r2(r), fundGoal: r2(gl) } : null;
+    updateFund(id, r2(v), amounts).then(ok => { if (ok) { pct.value = ""; raised.value = ""; fundPreview(); } });
   };
   pct.addEventListener("input", fundPreview);
   pct.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fundGo(); } });
-  const fundPane = h("div", { class: "pane", hidden: true },
+  // LaunchGood blocks automated reading, so organisers open the page and enter $ raised and $ goal; the % is worked out here
+  const fundLinks = h("div", { class: "fund-links" });
+  const raised = h("input", { class: "field", type: "number", min: "0", step: "0.01", id: "fr-" + id, placeholder: "$ raised", "aria-label": "Amount raised" });
+  const goal = h("input", { class: "field", type: "number", min: "0", step: "0.01", id: "fg-" + id, placeholder: "$ goal", "aria-label": "Fundraising goal" });
+  const calc = () => {
+    const r = Number(raised.value), gl = Number(goal.value);
+    if (raised.value !== "" && goal.value !== "" && r >= 0 && gl > 0) { pct.value = String(r2(r / gl * 100)); fundPreview(); }
+  };
+  raised.addEventListener("input", calc); goal.addEventListener("input", calc);
+  raised.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fundGo(); } });
+  goal.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fundGo(); } });
+  const fundPane = h("div", { class: "pane", hidden: true }, fundLinks,
+    h("div", { class: "row2" }, raised, h("span", { class: "of", text: "of" }), goal),
     h("div", { class: "row2" }, h("div", { class: "pct" }, pct, h("span", { text: "%" })), h("button", { class: "btn primary", type: "button", text: "Update fundraiser", onclick: fundGo })), fundPrev);
+  function renderFundLinks() {
+    const urls = campaignsOf(id);
+    fundLinks.replaceChildren(...(urls.length
+      ? [h("span", { class: "lbl", text: urls.length > 1 ? "Fundraiser pages" : "Fundraiser page" }),
+         ...urls.map((u, i) => h("a", { class: "btn ghost", href: u, target: "_blank", rel: "noopener", text: urls.length > 1 ? `Open LaunchGood page ${i + 1} ↗` : "Open LaunchGood page ↗" }))]
+      : [h("span", { class: "hint", text: "No fundraiser link on this team's delegates. Enter the % or the amounts below." })]));
+    const g = G(); if (g && g.fundGoal && document.activeElement !== goal && goal.value === "") goal.value = String(g.fundGoal);
+  }
   function fundPreview() {
     const g = G(); if (!g) return;
     const cur = g.fundPct || 0;
@@ -351,7 +446,8 @@ function buildAdminRow(id) {
     mode = mode === key && !quiet ? null : key;
     typeBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(TYPES[i][0] === mode)));
     for (const [k, p] of Object.entries(panes)) p.hidden = k !== mode;
-    const first = { bonus: amt, hub: part, fund: pct }[mode];
+    const first = { bonus: amt, hub: useList() ? null : part, fund: raised }[mode];
+    if (mode === "fund") renderFundLinks();
     if (mode === "hub") { hubPreview(); if (!G()?.size) return; }
     if (mode === "fund") fundPreview();
     if (first && !quiet) first.focus();
@@ -370,13 +466,60 @@ function buildAdminRow(id) {
     else { let firstOpen = 1; for (let s = 1; s <= n; s++) if (typeof hub["s" + s] !== "number") { firstOpen = s; break; } stSel.value = String(firstOpen); }
   }
 
+  // Delegates: list, add, remove; delegation number
+  const rosterList = h("ul", { class: "roster" });
+  const dFirst = h("input", { class: "field", id: "df-" + id, maxlength: "60", placeholder: "First name", "aria-label": "First name" });
+  const dLast = h("input", { class: "field", id: "dl-" + id, maxlength: "60", placeholder: "Last name", "aria-label": "Last name" });
+  const dLink = h("input", { class: "field", id: "dk-" + id, type: "url", maxlength: "500", placeholder: "Fundraiser link (optional)", "aria-label": "Fundraiser link" });
+  const numIn = h("input", { class: "field", id: "dn-" + id, maxlength: "20", placeholder: "e.g. 12", "aria-label": "Delegation number" });
+  const sizeSync = h("div", { class: "preview" });
+  const addDel = async () => {
+    const first = dFirst.value.trim(), last = dLast.value.trim(), link = dLink.value.trim();
+    if (!first && !last) return toast("Enter the delegate's first or last name.");
+    if (link && !campaignUrl(link)) return toast("The fundraiser link should start with https://");
+    if (await addDelegate(id, first, last, link)) { dFirst.value = dLast.value = dLink.value = ""; dFirst.focus(); }
+  };
+  [dFirst, dLast, dLink].forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addDel(); } }));
+  numIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); saveNum(); } });
+  const saveNum = () => { const g = G(); if (g && numIn.value.trim() !== g.number) setNumber(id, numIn.value.trim()); };
+  const rosterPane = h("div", { class: "pane", hidden: true },
+    h("div", { class: "row2" }, h("label", { class: "lbl", for: numIn.id, text: "Delegation number" }), numIn, h("button", { class: "btn", type: "button", text: "Save number", onclick: saveNum })),
+    sizeSync, rosterList,
+    h("div", { class: "row2 add-del" }, dFirst, dLast, dLink, h("button", { class: "btn primary", type: "button", text: "Add delegate", onclick: addDel })));
+  let rosterKey = "";
+  function renderRoster(force) {
+    const g = G(); if (!g) return;
+    const roster = rosterOf(id);
+    const key = roster.map(d => d.id + fullName(d) + (d.link || "")).join("|") + "|" + g.size;
+    if (document.activeElement !== numIn) numIn.value = g.number || "";
+    if (key === rosterKey && !force) return;
+    rosterKey = key;
+    rosterList.replaceChildren(...(roster.length ? roster.map(d => {
+      const li = h("li");
+      const linkEl = campaignUrl(d.link) ? h("a", { href: d.link, target: "_blank", rel: "noopener", text: "Fundraiser ↗" }) : null;
+      const rm = h("button", { class: "linkbtn danger-link", type: "button", text: "Remove", "aria-label": "Remove " + fullName(d),
+        onclick: () => confirmInline(li, `Remove ${fullName(d)}?`, "Remove", () => removeDelegate(d.id), () => renderRoster(true)) });
+      li.append(h("span", { class: "dn", text: fullName(d) }), linkEl || "", rm);
+      return li;
+    }) : [h("li", { class: "empty-note", text: "No delegates listed yet. Add them below or import a CSV." })]));
+    sizeSync.replaceChildren();
+    if (roster.length && g.size !== roster.length) {
+      sizeSync.append(h("span", { class: "warn-text", text: `Delegation size is ${g.size || "not set"}, but ${roster.length} delegates are listed. ` }),
+        h("button", { class: "linkbtn", type: "button", text: `Set size to ${roster.length}`, onclick: () => setSize(id, roster.length) }));
+    } else if (roster.length) sizeSync.textContent = `${roster.length} delegates listed. Delegation size follows this list.`;
+  }
+
   // Row tools
   const tools = h("div", { class: "actions" });
   const renameBtn = h("button", { class: "btn ghost", type: "button", text: "Rename", onclick: () => openRename() });
+  const delegatesBtn = h("button", { class: "btn ghost", type: "button", "aria-expanded": "false", onclick: () => {
+    rosterPane.hidden = !rosterPane.hidden; delegatesBtn.setAttribute("aria-expanded", String(!rosterPane.hidden));
+    if (!rosterPane.hidden) { renderRoster(true); dFirst.focus(); }
+  } });
   const sizeBtn = h("button", { class: "btn ghost", type: "button", text: "Delegation size", onclick: () => openSize() });
   const colorBtn = h("button", { class: "btn ghost", type: "button", text: "Colour", onclick: () => cycleColor(id) });
   const delBtn = h("button", { class: "btn danger", type: "button", text: "Delete", onclick: () => confirmInline(tools, "Delete this group?", "Delete", () => removeGroup(id), resetTools) });
-  function resetTools() { tools.replaceChildren(renameBtn, sizeBtn, colorBtn, delBtn); }
+  function resetTools() { tools.replaceChildren(delegatesBtn, renameBtn, sizeBtn, colorBtn, delBtn); }
   function inlineEdit(input, onSave) {
     const save = async () => { if (await onSave(input.value)) resetTools(); };
     input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } if (e.key === "Escape") resetTools(); });
@@ -402,7 +545,7 @@ function buildAdminRow(id) {
   // Volunteers only record hub activity: no type picker, no row tools
   if (isVol()) { types.hidden = true; tools.hidden = true; setMode("hub", true); }
 
-  const el = h("div", { class: "arow" }, h("div", { class: "line1" }, rank, sw, name, pts), breakdown, types, bonusPane, hubPane, fundPane, tools);
+  const el = h("div", { class: "arow" }, h("div", { class: "line1" }, rank, sw, name, pts), breakdown, types, bonusPane, hubPane, fundPane, rosterPane, tools);
   function refresh(g, rk, q) {
     sw.style.background = safeColor(g.color);
     paintName(name, g.name, q);
@@ -411,8 +554,10 @@ function buildAdminRow(id) {
     pts.textContent = fmt(g.points + p);
     pts.classList.toggle("pending", p !== 0 || flushing.has(id));
     const n = stationsN();
+    const listed = rosterOf(id).length;
     breakdown.replaceChildren(...[
-      h("span", { class: g.size ? "" : "warn", text: g.size ? `Delegation: ${g.size}` : "Delegation size not set" }),
+      g.number ? h("span", { text: `No. ${g.number}` }) : null,
+      h("span", { class: g.size ? (listed && listed !== g.size ? "warn" : "") : "warn", text: g.size ? `Delegation: ${g.size}` + (listed && listed !== g.size ? ` · ${listed} listed` : "") : "Delegation size not set" }),
       isVol() ? null : h("span", { text: `Bonus ${fmt(bonusPoints(g) + p)}` }),
       h("span", { text: `Hub ${fmt(hubPoints(g))} · ${stationsDone(g)}/${n} stations` }),
       isVol() ? null : h("span", { text: `Fundraiser ${fmt(fundPoints(g.fundPct))} · ${fmt(g.fundPct || 0)}%` }),
@@ -422,13 +567,19 @@ function buildAdminRow(id) {
     sizeText.textContent = isVol() ? "This team has no delegation size yet. Ask an organiser to set it before recording hub activity." : "Set this team's delegation size first. ";
     sizeLink.hidden = isVol();
     part.max = String(g.size || 0);
-    part.disabled = hubBtn.disabled = stSel.disabled = !g.size;
+    const list = useList();
+    part.hidden = list; chkWrap.hidden = !list;
+    noList.hidden = list || !isVol();
+    part.disabled = hubBtn.disabled = stSel.disabled = !g.size || (isVol() && !list);
+    renderChecklist();
+    delegatesBtn.textContent = `Delegates (${listed})`;
+    if (!rosterPane.hidden) renderRoster();
     if (mode === "hub") hubPreview();
-    if (mode === "fund") fundPreview();
+    if (mode === "fund") { renderFundLinks(); fundPreview(); }
   }
   function focusEntry() {
     el.scrollIntoView({ block: "center", behavior: reduced ? "auto" : "smooth" });
-    if (isVol()) (part.disabled ? stSel : part).focus(); else typeBtns[0].focus();
+    if (isVol()) (useList() ? (chk.querySelector("input") || stSel) : stSel).focus(); else typeBtns[0].focus();
   }
   return { el, refresh, focusEntry };
 }
@@ -454,7 +605,7 @@ function renderDanger() {
   const d = $("danger");
   d.replaceChildren(
     h("button", { class: "btn danger", type: "button", text: "Reset all scores to 0", onclick: () => confirmInline(d, "Set every group to 0?", "Reset scores", resetScores, renderDanger) }),
-    h("button", { class: "btn danger", type: "button", text: "Remove all groups", onclick: () => confirmInline(d, "Remove every group?", "Remove all", removeAll, renderDanger) }));
+    h("button", { class: "btn danger", type: "button", text: "Remove all groups", onclick: () => confirmInline(d, "Remove every group and delegate?", "Remove all", removeAll, renderDanger) }));
 }
 function renderSwatches() {
   $("add-swatches").replaceChildren(...COLORS.map(c => h("button", {
@@ -496,14 +647,19 @@ async function flush(id) {
   if (pending.get(id)) flush(id);
 }
 // Hub activity: recording a station replaces that station's earlier entry, so only the difference is added
-async function recordHub(id, station, count) {
+async function recordHub(id, station, count, people) {
   if (!needHub()) return false; const g = state.groups.get(id); if (!g) return false;
   const prev = (g.hub || {})["s" + station];
   const delta = hubPoints(g, g.size, stationsN(), { ...(g.hub || {}), ["s" + station]: count }) - hubPoints(g);
+  const who = people && people.length ? ` (${shortNames(people)})` : "";
   try {
     // lastStation names the one station changed, so the Firestore rules can check a volunteer's points against the formula
-    await updateDoc(gref(id), { ["hub.s" + station]: count, points: increment(delta), lastStation: "s" + station, updatedAt: Date.now() });
-    addLog(`Hub · ${stationLabel(station)}: ${count}/${g.size} of ${g.name}${typeof prev === "number" ? ` (was ${prev})` : ""} → ${signed(delta)}`);
+    // hubPeople keeps who was ticked at each station; a number-only entry (no list) removes any old names
+    await updateDoc(gref(id), {
+      ["hub.s" + station]: count, ["hubPeople.s" + station]: people ? people : deleteField(),
+      points: increment(delta), lastStation: "s" + station, updatedAt: Date.now(),
+    });
+    addLog(`Hub · ${stationLabel(station)}: ${count}/${g.size} of ${g.name}${who}${typeof prev === "number" ? ` (was ${prev})` : ""} → ${signed(delta)}`);
     toast(`${g.name}: ${stationLabel(station)} recorded, ${signed(delta)} pts.`);
     return true;
   } catch (e) { toast(errMsg(e)); return false; }
@@ -513,18 +669,18 @@ async function clearHub(id, station) {
   const hub = { ...(g.hub || {}) }; delete hub["s" + station];
   const delta = hubPoints(g, g.size, stationsN(), hub) - hubPoints(g);
   try {
-    await updateDoc(gref(id), { ["hub.s" + station]: deleteField(), points: increment(delta), updatedAt: Date.now() });
+    await updateDoc(gref(id), { ["hub.s" + station]: deleteField(), ["hubPeople.s" + station]: deleteField(), points: increment(delta), updatedAt: Date.now() });
     addLog(`Hub · ${stationLabel(station)} cleared for ${g.name} → ${signed(delta)}`); toast(`${stationLabel(station)} cleared for ${g.name}.`);
   } catch (e) { toast(errMsg(e)); }
 }
 // Fundraiser: store the % raised; award only the change since the last update
-async function updateFund(id, pct) {
+async function updateFund(id, pct, amounts) {
   if (!need()) return false; const g = state.groups.get(id); if (!g) return false;
   const old = g.fundPct || 0;
   const delta = fundPoints(pct) - fundPoints(old);
   try {
-    await updateDoc(gref(id), { fundPct: pct, points: increment(delta), updatedAt: Date.now() });
-    addLog(`Fundraiser · ${g.name}: ${fmt(old)}% → ${fmt(pct)}% → ${signed(delta)}`);
+    await updateDoc(gref(id), { fundPct: pct, ...(amounts || {}), points: increment(delta), updatedAt: Date.now() });
+    addLog(`Fundraiser · ${g.name}: ${fmt(old)}% → ${fmt(pct)}%${amounts ? ` ($${fmt(amounts.fundRaised)} of $${fmt(amounts.fundGoal)})` : ""} → ${signed(delta)}`);
     toast(`${g.name}: fundraiser at ${fmt(pct)}%, ${signed(delta)} pts.`);
     return true;
   } catch (e) { toast(errMsg(e)); return false; }
@@ -542,6 +698,58 @@ async function setSize(id, size) {
     return true;
   } catch (e) { toast(errMsg(e)); return false; }
 }
+// Delegates. Size follows the list unless an organiser set it by hand (then it's left alone).
+const delRef = (did) => doc(db, "delegates", did);
+function followsList(g, listedBefore) { return !g.size || g.size === listedBefore; }
+async function addDelegate(gid, first, last, link) {
+  if (!need()) return false; const g = state.groups.get(gid); if (!g) return false;
+  const before = rosterOf(gid).length;
+  const size = followsList(g, before) ? before + 1 : g.size;
+  const delta = hubPoints(g, size) - hubPoints(g);
+  try {
+    const b = writeBatch(db);
+    b.set(doc(collection(db, "delegates")), { first, last, link: link || "", groupId: gid, createdAt: Date.now() });
+    if (size !== g.size) b.update(gref(gid), { size, points: increment(delta), updatedAt: Date.now() });
+    await b.commit();
+    addLog(`Added delegate ${[first, last].filter(Boolean).join(" ")} to ${g.name}${size !== g.size ? ` (size ${g.size || 0} → ${size})` : ""}`);
+    toast(`Added ${first || last} to ${g.name}.`);
+    return true;
+  } catch (e) { toast(errMsg(e)); return false; }
+}
+// Removing a delegate also takes them off any station they were ticked at
+async function removeDelegate(did) {
+  if (!need()) return; const d = state.delegates.get(did); if (!d) return;
+  const g = state.groups.get(d.groupId);
+  try {
+    const b = writeBatch(db);
+    b.delete(delRef(did));
+    if (g) {
+      const before = rosterOf(g.id).length;
+      const size = followsList(g, before) ? Math.max(0, before - 1) : g.size;
+      const hub = { ...(g.hub || {}) }, upd = {};
+      for (const [k, arr] of Object.entries(g.hubPeople || {})) {
+        if (!Array.isArray(arr) || !arr.includes(did)) continue;
+        const left = arr.filter(x => x !== did);
+        upd["hubPeople." + k] = left;
+        hub[k] = left.length; upd["hub." + k] = left.length;
+      }
+      for (const [k, c] of Object.entries(hub)) if (typeof c === "number" && size && c > size) { hub[k] = size; upd["hub." + k] = size; }
+      const delta = hubPoints(g, size, stationsN(), hub) - hubPoints(g);
+      if (size !== g.size) upd.size = size;
+      if (Object.keys(upd).length) b.update(gref(g.id), { ...upd, points: increment(delta), updatedAt: Date.now() });
+    }
+    await b.commit();
+    addLog(`Removed delegate ${fullName(d)}${g ? " from " + g.name : ""}`);
+    toast(`Removed ${fullName(d)}.`);
+  } catch (e) { toast(errMsg(e)); }
+}
+async function setNumber(id, number) {
+  if (!need()) return; const g = state.groups.get(id); if (!g) return;
+  if (number && [...state.groups.values()].some(o => o.id !== id && o.number === number)) return toast(`Delegation number ${number} is already used by another team.`);
+  try { await updateDoc(gref(id), { number }); addLog(`${g.name}: delegation number ${g.number || "none"} → ${number || "none"}`); toast("Delegation number saved."); }
+  catch (e) { toast(errMsg(e)); }
+}
+
 // Changing the number of hub stations re-values every team's hub points in one batch
 async function setStations(n) {
   if (!need()) return;
@@ -569,22 +777,27 @@ async function cycleColor(id) {
 }
 async function removeGroup(id) {
   if (!need()) return; const g = state.groups.get(id);
-  try { await deleteDoc(gref(id)); addLog(`Removed ${g ? g.name : "a group"}`); toast("Group removed."); } catch (e) { toast(errMsg(e)); }
+  try {
+    const b = writeBatch(db);
+    b.delete(gref(id));
+    rosterOf(id).forEach(d => b.delete(delRef(d.id)));
+    await b.commit(); addLog(`Removed ${g ? g.name : "a group"} and its delegates`); toast("Group removed.");
+  } catch (e) { toast(errMsg(e)); }
 }
 async function resetScores() {
   if (!need()) return;
   try {
     const b = writeBatch(db);
-    for (const g of state.groups.values()) b.update(gref(g.id), { points: 0, hub: deleteField(), fundPct: 0, updatedAt: Date.now() });
+    for (const g of state.groups.values()) b.update(gref(g.id), { points: 0, hub: deleteField(), hubPeople: deleteField(), fundPct: 0, updatedAt: Date.now() });
     await b.commit(); addLog("All scores reset to 0 (hub and fundraiser records cleared)"); toast("All scores reset.");
   } catch (e) { toast(errMsg(e)); }
 }
 async function removeAll() {
   if (!need()) return;
   try {
-    const b = writeBatch(db);
-    for (const g of state.groups.values()) b.delete(gref(g.id));
-    await b.commit(); addLog("All groups removed"); toast("All groups removed.");
+    const refs = [...[...state.groups.values()].map(g => gref(g.id)), ...[...state.delegates.keys()].map(delRef)];
+    for (let i = 0; i < refs.length; i += 450) { const b = writeBatch(db); refs.slice(i, i + 450).forEach(r => b.delete(r)); await b.commit(); }
+    addLog("All groups and delegates removed"); toast("All groups and delegates removed.");
   } catch (e) { toast(errMsg(e)); }
 }
 // The organiser's display name comes from their record in the `admins` collection
@@ -614,9 +827,11 @@ $("add-form").addEventListener("submit", async (e) => {
   if ([...state.groups.values()].some(g => g.name.toLowerCase() === name.toLowerCase())) return toast("A group with that name already exists.");
   const btn = $("add-btn"); btn.disabled = true;
   try {
-    await addDoc(collection(db, "groups"), { name, points: pts, size, fundPct: 0, hub: {}, color: addColor, createdAt: Date.now(), updatedAt: Date.now() });
+    const number = $("add-number").value.trim();
+    if (number && [...state.groups.values()].some(o => o.number === number)) { btn.disabled = false; return toast(`Delegation number ${number} is already used.`); }
+    await addDoc(collection(db, "groups"), { name, number, points: pts, size, fundPct: 0, hub: {}, hubPeople: {}, color: addColor, createdAt: Date.now(), updatedAt: Date.now() });
     addLog(`Added ${name} (${size} delegates)${pts ? " with " + fmt(pts) + " bonus pts" : ""}`);
-    $("add-name").value = ""; $("add-points").value = "0"; $("add-size").value = "";
+    $("add-name").value = ""; $("add-points").value = "0"; $("add-size").value = ""; $("add-number").value = "";
     addColor = COLORS[(COLORS.indexOf(addColor) + 1) % COLORS.length]; renderSwatches();
     toast(`Added ${name}.`); $("add-name").focus();
   } catch (err) { toast(errMsg(err)); }
@@ -636,6 +851,144 @@ $("set-hidden").addEventListener("change", (e) => {
   const hidden = e.target.checked;
   saveSettings({ hidden }, hidden ? "Scores hidden on the public board." : "Scores are showing again.");
   addLog(hidden ? "Scores hidden for the reveal" : "Scores revealed");
+});
+
+/* ---------- CSV import ----------
+   Columns: first name, last name, delegation name, delegation number, fundraiser link (any order; headers are matched
+   by name, or the columns are read in that order when there's no header row). Teams are matched by delegation number,
+   then by name; new ones are created. Delegates already on a team's list are skipped, so re-importing is safe. */
+function parseCSV(text) {
+  text = String(text).replace(/^﻿/, "");
+  const firstLine = text.split(/\r?\n/, 1)[0] || "";
+  const delim = [",", ";", "\t"].reduce((best, d) => firstLine.split(d).length > firstLine.split(best).length ? d : best, ",");
+  const rows = []; let row = [], cell = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+      else cell += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === delim) { row.push(cell); cell = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell); cell = "";
+      if (row.some(c => c.trim() !== "")) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  row.push(cell); if (row.some(c => c.trim() !== "")) rows.push(row);
+  return rows.map(r => r.map(c => c.trim()));
+}
+function mapHeader(cells) {
+  const idx = {};
+  cells.forEach((raw, i) => {
+    const c = norm(raw).replace(/[_\-]+/g, " ");
+    let f = null;
+    if (/(link|url|fundrais|launchgood|donat)/.test(c)) f = "link";
+    else if (/(deleg|team|group|school)/.test(c) && /(num|no\b|no\.|#|id|code)/.test(c)) f = "number";
+    else if (/^(number|num|no\.?|#|id)$/.test(c)) f = "number";
+    else if (/(deleg|team|group|school)/.test(c)) f = "team";
+    else if (/(first|given|prenom)/.test(c)) f = "first";
+    else if (/(last|surname|family)/.test(c)) f = "last";
+    if (f && idx[f] == null) idx[f] = i;
+  });
+  return Object.keys(idx).length >= 3 ? idx : null;
+}
+let importPlan = null;
+function planImport(rows) {
+  const found = mapHeader(rows[0] || []);
+  const body = found ? rows.slice(1) : rows;
+  const header = found || { first: 0, last: 1, team: 2, number: 3, link: 4 };
+  const get = (r, f) => header[f] == null ? "" : String(r[header[f]] || "").trim();
+  const groups = [...state.groups.values()];
+  const teams = new Map(), problems = [];
+  const keyOf = (d) => norm(d.first) + "|" + norm(d.last);
+  body.forEach((r, i) => {
+    const line = i + (found ? 2 : 1);
+    const d = { first: get(r, "first").slice(0, 60), last: get(r, "last").slice(0, 60), team: get(r, "team").slice(0, 60), number: get(r, "number").slice(0, 20), link: get(r, "link").slice(0, 500) };
+    if (!d.first && !d.last) return problems.push(`Row ${line}: no first or last name, skipped.`);
+    if (!d.team && !d.number) return problems.push(`Row ${line}: no delegation name or number, skipped.`);
+    if (d.link && !campaignUrl(d.link)) { problems.push(`Row ${line}: fundraiser link isn't a web address, imported without it.`); d.link = ""; }
+    const tkey = d.number ? "#" + norm(d.number) : "n:" + norm(d.team);
+    let t = teams.get(tkey);
+    if (!t) {
+      const existing = (d.number && groups.find(g => g.number && norm(g.number) === norm(d.number)))
+        || (d.team && groups.find(g => norm(g.name) === norm(d.team) && (!g.number || !d.number)));
+      t = { name: d.team || (existing ? existing.name : `Delegation ${d.number}`), number: d.number, existing: existing || null, add: [], skipped: 0, seen: new Set(existing ? rosterOf(existing.id).map(keyOf) : []) };
+      teams.set(tkey, t);
+    }
+    const k = keyOf(d);
+    if (t.seen.has(k)) { t.skipped++; return; }
+    t.seen.add(k); t.add.push(d);
+  });
+  return { teams: [...teams.values()], problems, headerFound: !!found };
+}
+function renderImportPreview() {
+  const box = $("csv-preview"), btn = $("csv-import");
+  if (!importPlan) { box.replaceChildren(); btn.disabled = true; btn.textContent = "Import"; return; }
+  const { teams, problems, headerFound } = importPlan;
+  const adding = teams.reduce((n, t) => n + t.add.length, 0), skipped = teams.reduce((n, t) => n + t.skipped, 0);
+  const newTeams = teams.filter(t => !t.existing).length;
+  const table = h("table", { class: "csv-table" },
+    h("thead", null, h("tr", null, ["No.", "Delegation", "Status", "New delegates"].map(x => h("th", { text: x })))),
+    h("tbody", null, teams.map(t => h("tr", null,
+      h("td", { text: t.number || "—" }), h("td", { text: t.name }),
+      h("td", { text: t.existing ? "Existing team" : "New team" }),
+      h("td", { text: String(t.add.length) + (t.skipped ? ` (${t.skipped} already listed)` : "") })))));
+  box.replaceChildren(...[
+    h("p", { class: "csv-sum" }, h("strong", { text: `${adding} delegate${adding === 1 ? "" : "s"}` }),
+      ` in ${teams.length} delegation${teams.length === 1 ? "" : "s"}: ${newTeams} new team${newTeams === 1 ? "" : "s"}, ${teams.length - newTeams} existing.`,
+      skipped ? ` ${skipped} already on a list will be skipped.` : ""),
+    headerFound ? null : h("p", { class: "hint", text: "No header row found, so columns were read in this order: first name, last name, delegation name, delegation number, fundraiser link." }),
+    h("div", { class: "csv-scroll" }, table),
+    problems.length ? h("details", { class: "csv-problems" }, h("summary", { text: `${problems.length} row${problems.length === 1 ? "" : "s"} need attention` }), h("ul", null, problems.slice(0, 50).map(x => h("li", { text: x })))) : null,
+  ].filter(Boolean));
+  btn.disabled = adding === 0;
+  btn.textContent = `Import ${adding} delegate${adding === 1 ? "" : "s"}`;
+}
+$("csv-file").addEventListener("change", async (e) => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  if (f.size > 2 * 1024 * 1024) { importPlan = null; renderImportPreview(); return toast("That file is over 2 MB. Check it's the delegate CSV."); }
+  try {
+    const rows = parseCSV(await f.text());
+    if (!rows.length) { importPlan = null; renderImportPreview(); return toast("That file is empty."); }
+    importPlan = planImport(rows);
+    renderImportPreview();
+  } catch (err) { importPlan = null; renderImportPreview(); toast("Couldn't read that file. Save it as CSV (comma separated) and try again."); }
+});
+$("csv-import").addEventListener("click", async () => {
+  if (!need() || !importPlan) return;
+  const btn = $("csv-import"); btn.disabled = true; btn.textContent = "Importing…";
+  const ops = []; const now = Date.now(); let ci = state.groups.size, made = 0, added = 0;
+  for (const t of importPlan.teams) {
+    if (!t.add.length) continue;
+    let gid;
+    if (t.existing) {
+      const g = state.groups.get(t.existing.id); if (!g) continue;
+      gid = g.id;
+      const before = rosterOf(gid).length, upd = {};
+      if (followsList(g, before)) { upd.size = before + t.add.length; upd.points = increment(hubPoints(g, upd.size) - hubPoints(g)); }
+      if (t.number && !g.number) upd.number = t.number;
+      if (Object.keys(upd).length) ops.push(b => b.update(gref(gid), { ...upd, updatedAt: now }));
+    } else {
+      const ref = doc(collection(db, "groups")); gid = ref.id; made++;
+      const color = COLORS[ci++ % COLORS.length], createdAt = now + made;
+      ops.push(b => b.set(ref, { name: t.name, number: t.number, points: 0, size: t.add.length, fundPct: 0, hub: {}, hubPeople: {}, color, createdAt, updatedAt: now }));
+    }
+    for (const d of t.add) {
+      const ref = doc(collection(db, "delegates")); added++;
+      ops.push(b => b.set(ref, { first: d.first, last: d.last, link: d.link, groupId: gid, createdAt: now }));
+    }
+  }
+  try {
+    for (let i = 0; i < ops.length; i += 450) { const b = writeBatch(db); ops.slice(i, i + 450).forEach(op => op(b)); await b.commit(); }
+    addLog(`Imported ${added} delegate${added === 1 ? "" : "s"} from CSV (${made} new team${made === 1 ? "" : "s"})`);
+    toast(`Imported ${added} delegate${added === 1 ? "" : "s"}${made ? ` and created ${made} team${made === 1 ? "" : "s"}` : ""}.`);
+    importPlan = null; $("csv-file").value = ""; renderImportPreview();
+  } catch (err) {
+    toast(errMsg(err) + " Some rows may already be in; importing the same file again skips anyone already listed.");
+    renderImportPreview();
+  }
 });
 
 /* ---------- views ---------- */
@@ -806,6 +1159,18 @@ async function checkAdmin(user) {
   if (user) { $("si-who").textContent = user.email || "this account"; $("si-uid").textContent = user.uid; }
   $("admin-who").textContent = user ? "Signed in as " + (state.adminName ? `${state.adminName} (${user.email || user.uid})` : (user.email || user.uid)) + (role === "volunteer" ? " · Volunteer" : role === "admin" ? " · Organiser" : "") : "";
   if (unsubLog) { unsubLog(); unsubLog = null; }
+  if (unsubDel) { unsubDel(); unsubDel = null; state.delegates = new Map(); }
+  if (role) {
+    unsubDel = onSnapshot(collection(db, "delegates"), (snap) => {
+      const m = new Map();
+      for (const d of snap.docs) {
+        const x = d.data() || {};
+        m.set(d.id, { id: d.id, first: String(x.first || "").slice(0, 60), last: String(x.last || "").slice(0, 60), groupId: String(x.groupId || ""), link: String(x.link || "").slice(0, 500) });
+      }
+      state.delegates = m;
+      renderAll();
+    }, () => toast("Couldn't load the delegate lists. Check the Firebase rules are up to date."));
+  }
   if (role) {
     unsubLog = onSnapshot(query(collection(db, "log"), orderBy("t", "desc"), limit(LOG_LIMIT)), (snap) => {
       state.log = snap.docs.map(d => d.data()).filter(e => typeof e.text === "string");
@@ -838,6 +1203,9 @@ function start() {
         id: d.id, name: String(x.name || "Unnamed group"), points: Number(x.points) || 0, color: x.color, createdAt: Number(x.createdAt) || 0,
         size: Number.isInteger(x.size) && x.size > 0 ? x.size : 0,
         hub: x.hub && typeof x.hub === "object" ? x.hub : {},
+        hubPeople: x.hubPeople && typeof x.hubPeople === "object" ? x.hubPeople : {},
+        number: x.number != null ? String(x.number).slice(0, 20) : "",
+        fundGoal: Number(x.fundGoal) || 0,
         fundPct: Number(x.fundPct) || 0,
       };
       const old = state.groups.get(d.id);

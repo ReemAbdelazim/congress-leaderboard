@@ -58,6 +58,25 @@ Every entry in **Recent changes** shows who made it (the `name` field from `admi
 - **Admin view:** search teams; add points by type; set each team's delegation size; rename, recolour or delete groups; set the number of hub stations; edit the title; **hide scores for the reveal**; reset everything.
 - Score changes are atomic increments, so two organisers tapping at the same time never lose points.
 
+## Delegates and CSV import
+
+**Admin → Import delegates** takes a CSV with these columns (header names can vary; without a header row they're read in this order):
+
+| first name | last name | delegation name | delegation number | fundraiser link |
+| --- | --- | --- | --- | --- |
+
+- Teams are matched by delegation number, then by name. New delegations become new teams.
+- A preview shows what will happen before anything is saved. Rows with no name or no delegation are skipped and listed.
+- Anyone already on a team's list is skipped, so importing an updated file again only adds the new people.
+- Nothing is locked: organisers can add or remove delegates, change the delegation number and change the delegation size on each team (**Delegates** button).
+- Delegation size follows the list (adding or removing a delegate moves it by one). If an organiser sets a different size by hand it is kept, and the team shows a "· N listed" warning with a one-click fix.
+- Removing a delegate also takes them off any station they were ticked at.
+- Delegate names and links are private to organisers and volunteers (Firestore rules); the public board never loads them.
+
+**Hub check-in:** pick the station and tick who came. Points = ticked ÷ delegation size × (1000 ÷ stations). Re-saving a station replaces its earlier entry. Teams without a delegate list fall back to entering a number (organisers only).
+
+**Fundraiser:** LaunchGood blocks automated reading of its pages, so the % can't be fetched automatically. Each team shows its LaunchGood campaign link (taken from the delegates' links, without the `?src=` part); open it, type **$ raised** and **$ goal**, and the % fills in.
+
 ## Point types
 
 Organisers pick the type before entering points:

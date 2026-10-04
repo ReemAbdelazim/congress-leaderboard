@@ -185,6 +185,38 @@
   .role-types button { flex: 1; padding: 10px 12px; font-size: 14px; }
   .role-types button[aria-checked="true"] { background: var(--mint); color: var(--ink); }
   .role-pick .hint { margin: 0; }
+  /* Delegates: station check-in list, roster, CSV import */
+  .visually-hidden { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .file-btn { display: inline-flex; }
+  .chk-wrap { display: grid; gap: 8px; }
+  .chk-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .chk-head .lbl { margin: 0; }
+  .checklist { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; }
+  .chk { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--ink); cursor: pointer; min-height: 44px; overflow-wrap: anywhere; }
+  .chk input { width: 20px; height: 20px; accent-color: var(--green); flex: none; margin: 0; }
+  .chk:has(input:checked) { border-color: var(--mint); background: rgba(138, 208, 155, .12); }
+  .chk:has(input:focus-visible) { outline: 2px solid var(--mint); outline-offset: 2px; }
+  .roster { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 320px; overflow: auto; }
+  .roster li { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border-radius: 8px; background: var(--ink); border: 1px solid var(--line); font-size: 14px; }
+  .roster li .dn { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .roster li a { color: var(--mint); font-size: 12px; white-space: nowrap; }
+  .roster li.empty-note { background: none; border: 0; }
+  .danger-link { color: var(--danger); font-size: 12px; }
+  .add-del .field { flex: 1 1 130px; width: auto; }
+  .warn-text { color: var(--gold); }
+  .fund-links { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .fund-links .lbl { margin: 0; }
+  .fund-links a.btn { text-decoration: none; }
+  .pane .of { color: var(--muted); font-size: 13px; }
+  .csv-preview { display: grid; gap: 10px; margin-top: 12px; }
+  .csv-preview:empty { display: none; }
+  .csv-sum { margin: 0; font-size: 14px; }
+  .csv-scroll { overflow-x: auto; max-height: 260px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .csv-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .csv-table th, .csv-table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .csv-table th { position: sticky; top: 0; background: var(--navy-2); color: var(--muted); font-weight: 500; }
+  .csv-problems summary { cursor: pointer; color: var(--gold); font-size: 13px; }
+  .csv-problems ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
   /* Roles */
   body.volunteer .admin-only { display: none !important; }
   body:not(.volunteer) .volunteer-only { display: none !important; }

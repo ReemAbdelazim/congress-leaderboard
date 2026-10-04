@@ -26,8 +26,9 @@ service cloud.firestore {
       return exists(path) ? get(path).data.get('stations', 8) : 8;
     }
 
-    // A volunteer may record one hub station for one team, and the points must change
-    // by exactly what the hub formula gives. Nothing else about the team can change.
+    // A volunteer may record one hub station for one team: the delegates they ticked (hubPeople)
+    // and the matching count (hub). The points must change by exactly what the hub formula gives,
+    // and nothing else about the team can change.
     function validHubEntry() {
       let before = resource.data;
       let after = request.resource.data;
@@ -36,14 +37,33 @@ service cloud.firestore {
       let size = before.size;
       let c = after.hub[st];
       let o = before.get('hub', {}).get(st, 0);
-      return after.diff(before).affectedKeys().hasOnly(['hub', 'points', 'updatedAt', 'lastStation'])
+      let people = after.hubPeople[st];
+      return after.diff(before).affectedKeys().hasOnly(['hub', 'hubPeople', 'points', 'updatedAt', 'lastStation'])
         && st is string && st.matches('s[0-9]{1,2}')
         && int(st.replace('s', '')) >= 1 && int(st.replace('s', '')) <= n
         && after.hub.diff(before.get('hub', {})).affectedKeys().hasOnly([st])
+        && after.hubPeople.diff(before.get('hubPeople', {})).affectedKeys().hasOnly([st])
+        && people is list && people.size() == c
         && size is int && size > 0
         && c is int && c >= 0 && c <= size
         && o is int
         && math.abs(after.points - before.points - (c - o) * 1000.0 / (size * n)) < 0.01;
+    }
+
+    function validDelegate() {
+      let d = request.resource.data;
+      return d.groupId is string && d.groupId.size() > 0 && d.groupId.size() <= 100
+        && d.first is string && d.first.size() <= 60
+        && d.last is string && d.last.size() <= 60
+        && (d.first.size() > 0 || d.last.size() > 0)
+        && (!('link' in d) || (d.link is string && d.link.size() <= 500));
+    }
+
+    // Delegate names and fundraiser links are private: only organisers and volunteers can read them
+    match /delegates/{delegateId} {
+      allow read: if isAdmin() || isVolunteer();
+      allow create, update: if isAdmin() && validDelegate();
+      allow delete: if isAdmin();
     }
 
     // Public: anyone can read groups and board settings
