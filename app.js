@@ -907,6 +907,8 @@ function splitName(full) {
   return { first: parts[0] || "", last: parts.slice(1).join(" ") };
 }
 const personKey = (d) => norm(d.first + " " + d.last).replace(/[^a-z0-9]/g, "");
+// Forgiving match for delegation names: "St. Joseph Catholic" = "st joseph catholic"
+const looseKey = (s) => norm(s).replace(/[^a-z0-9]/g, "");
 let importPlan = null;
 function planImport(rows) {
   const found = mapHeader(rows[0] || []);
@@ -938,11 +940,11 @@ function planImport(rows) {
       if (ownLink) problems.push(`Row ${line}: fundraiser link isn't a web address, imported without it.`);
       d.link = "";
     } else if (ownLink && /#!|\/edit\b/.test(d.link)) problems.push(`Row ${line}: the fundraiser link for ${d.team || "#" + d.number} looks like an edit page; check it opens the public campaign.`);
-    const tkey = d.number ? "#" + norm(d.number) : "n:" + norm(d.team);
+    const tkey = d.number ? "#" + looseKey(d.number) : "n:" + looseKey(d.team);
     let t = teams.get(tkey);
     if (!t) {
-      const existing = (d.number && groups.find(g => g.number && norm(g.number) === norm(d.number)))
-        || (d.team && groups.find(g => norm(g.name) === norm(d.team) && (!g.number || !d.number)));
+      const existing = (d.number && groups.find(g => g.number && looseKey(g.number) === looseKey(d.number)))
+        || (d.team && groups.find(g => looseKey(g.name) === looseKey(d.team) && (!g.number || !d.number)));
       t = { name: d.team || (existing ? existing.name : `Delegation ${d.number}`), number: d.number, existing: existing || null,
             declared: Number.isInteger(Number(d.size)) && Number(d.size) > 0 ? Number(d.size) : null,
             add: [], skipped: 0, listed: 0, seen: new Set(existing ? rosterOf(existing.id).map(personKey) : []) };
@@ -1029,6 +1031,109 @@ $("csv-import").addEventListener("click", async () => {
     toast(errMsg(err) + " Some rows may already be in; importing the same file again skips anyone already listed.");
     renderImportPreview();
   }
+});
+
+/* ---------- fundraiser % import ----------
+   Columns: delegation name (or number) and percentage. Each listed team's % is replaced, like the
+   manual update, so points move by the difference. Teams not in the file are left alone. */
+function mapFundHeader(cells) {
+  const idx = {};
+  cells.forEach((raw, i) => {
+    const c = norm(raw).replace(/[_\-/]+/g, " ").replace(/\s+/g, " ").trim();
+    let f = null;
+    if (/(percent|%|pct|progress|fundrais)/.test(c)) f = "pct";
+    else if (/(deleg|team|group|school|organi[sz]ation|club)/.test(c) && /(num|no\b|no\.|#|\bid\b|code)/.test(c)) f = "number";
+    else if (/^(number|num|no\.?|#|id)$/.test(c)) f = "number";
+    else if (/(deleg|team|group|school|organi[sz]ation|club|chapter|name)/.test(c)) f = "team";
+    if (f && idx[f] == null) idx[f] = i;
+  });
+  return idx.pct != null && (idx.team != null || idx.number != null) ? idx : null;
+}
+// "64.4", "64.4%", " 64,4 % " → 64.4; blank → null; anything else → NaN
+function parsePct(raw) {
+  const s = String(raw == null ? "" : raw).trim().replace(/\s+/g, "");
+  if (!s) return null;
+  const m = s.replace(/,(\d+)%?$/, ".$1").match(/^(\d+(?:\.\d+)?)%?$/);
+  return m ? Number(m[1]) : NaN;
+}
+let fundPlan = null;
+function planFund(rows) {
+  const found = mapFundHeader(rows[0] || []);
+  const body = found ? rows.slice(1) : rows;
+  const header = found || { team: 0, pct: 1 };
+  const get = (r, f) => header[f] == null ? "" : String(r[header[f]] || "").trim();
+  const groups = [...state.groups.values()];
+  const updates = new Map(), unmatched = [], problems = [], values = [];
+  body.forEach((r, i) => {
+    const line = i + (found ? 2 : 1);
+    const name = get(r, "team"), number = get(r, "number"), pct = parsePct(get(r, "pct"));
+    if (!name && !number) return;
+    if (/^total/i.test(name)) return;
+    if (pct === null) return problems.push(`Row ${line} (${name || "#" + number}): no percentage, skipped.`);
+    if (Number.isNaN(pct)) return problems.push(`Row ${line} (${name || "#" + number}): "${get(r, "pct")}" isn't a percentage, skipped.`);
+    if (pct > FUND_MAX_PCT) return problems.push(`Row ${line} (${name || "#" + number}): ${pct}% is over the ${FUND_MAX_PCT}% limit, skipped.`);
+    const g = (number && groups.find(x => x.number && looseKey(x.number) === looseKey(number)))
+      || (name && groups.find(x => looseKey(x.name) === looseKey(name)));
+    if (!g) return unmatched.push(name || "#" + number);
+    if (updates.has(g.id)) problems.push(`${g.name} appears more than once; the last row (${pct}%) is used.`);
+    values.push(pct);
+    updates.set(g.id, { g, from: g.fundPct || 0, to: r2(pct) });
+  });
+  if (values.length && values.every(v => v <= 1) && values.some(v => v > 0 && v < 1)) {
+    problems.push("Every percentage is 1 or less. If the sheet uses 0.45 for 45%, multiply by 100 first: they'll be read as 0.45%.");
+  }
+  return { updates: [...updates.values()], unmatched, problems, headerFound: !!found };
+}
+function renderFundPreview() {
+  const box = $("fund-preview"), btn = $("fund-import");
+  if (!fundPlan) { box.replaceChildren(); btn.disabled = true; btn.textContent = "Update"; return; }
+  const { updates, unmatched, problems, headerFound } = fundPlan;
+  const changing = updates.filter(u => r2(u.from) !== u.to);
+  const total = changing.reduce((n, u) => n + fundPoints(u.to) - fundPoints(u.from), 0);
+  box.replaceChildren(...[
+    h("p", { class: "csv-sum" }, h("strong", { text: `${changing.length} team${changing.length === 1 ? "" : "s"}` }), " will change",
+      updates.length - changing.length ? `, ${updates.length - changing.length} already at that %` : "",
+      unmatched.length ? `, ${unmatched.length} name${unmatched.length === 1 ? "" : "s"} not found` : "", "."),
+    headerFound ? null : h("p", { class: "hint", text: "No header row found, so the first column was read as the delegation name and the second as the percentage." }),
+    updates.length ? h("div", { class: "csv-scroll" }, h("table", { class: "csv-table" },
+      h("thead", null, h("tr", null, ["Delegation", "Now", "New", "Points"].map(x => h("th", { text: x })))),
+      h("tbody", null, updates.map(u => h("tr", null,
+        h("td", { text: u.g.name }), h("td", { text: fmt(u.from) + "%" }), h("td", { text: fmt(u.to) + "%" }),
+        h("td", { text: r2(u.from) === u.to ? "no change" : signed(fundPoints(u.to) - fundPoints(u.from)) })))))) : null,
+    unmatched.length ? h("details", { class: "csv-problems", open: true }, h("summary", { text: `Not found on the leaderboard (${unmatched.length})` }),
+      h("p", { class: "hint", text: "Check the spelling matches the team name in Admin, or rename the team." }),
+      h("ul", null, unmatched.slice(0, 50).map(x => h("li", { text: x })))) : null,
+    problems.length ? h("details", { class: "csv-problems" }, h("summary", { text: `${problems.length} row${problems.length === 1 ? "" : "s"} need attention` }), h("ul", null, problems.slice(0, 50).map(x => h("li", { text: x })))) : null,
+  ].filter(Boolean));
+  btn.disabled = changing.length === 0;
+  btn.textContent = changing.length ? `Update ${changing.length} team${changing.length === 1 ? "" : "s"} (${signed(total)} pts)` : "Nothing to update";
+}
+$("fund-file").addEventListener("change", async (e) => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  if (f.size > 2 * 1024 * 1024) { fundPlan = null; renderFundPreview(); return toast("That file is over 2 MB. Check it's the fundraiser CSV."); }
+  try {
+    const rows = parseCSV(await f.text());
+    if (!rows.length) { fundPlan = null; renderFundPreview(); return toast("That file is empty."); }
+    fundPlan = planFund(rows);
+    renderFundPreview();
+  } catch (err) { fundPlan = null; renderFundPreview(); toast("Couldn't read that file. Save it as CSV (comma separated) and try again."); }
+});
+$("fund-import").addEventListener("click", async () => {
+  if (!need() || !fundPlan) return;
+  const btn = $("fund-import"); btn.disabled = true; btn.textContent = "Updating…";
+  // Work from the live values so a change made since the preview isn't double-counted
+  const changes = fundPlan.updates.map(u => ({ ...u, g: state.groups.get(u.g.id) })).filter(u => u.g && r2(u.g.fundPct || 0) !== u.to);
+  try {
+    const now = Date.now();
+    for (let i = 0; i < changes.length; i += 450) {
+      const b = writeBatch(db);
+      changes.slice(i, i + 450).forEach(u => b.update(gref(u.g.id), { fundPct: u.to, points: increment(fundPoints(u.to) - fundPoints(u.g.fundPct || 0)), updatedAt: now }));
+      await b.commit();
+    }
+    addLog(`Fundraiser import: ${changes.length} team${changes.length === 1 ? "" : "s"} updated (${changes.slice(0, 4).map(u => `${u.g.name} ${fmt(u.to)}%`).join(", ")}${changes.length > 4 ? ", …" : ""})`);
+    toast(`Fundraiser % updated for ${changes.length} team${changes.length === 1 ? "" : "s"}.`);
+    fundPlan = null; $("fund-file").value = ""; renderFundPreview();
+  } catch (err) { toast(errMsg(err)); renderFundPreview(); }
 });
 
 /* ---------- views ---------- */

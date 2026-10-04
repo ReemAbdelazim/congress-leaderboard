@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;500;600&family=Montserrat:wght@500;600;700;800&display=swap">
-<link rel="stylesheet" href="styles.css?v=2026-10-04b">
+<link rel="stylesheet" href="styles.css?v=2026-10-04c">
 </head>
 <body>
 <div class="rings" aria-hidden="true">
@@ -151,11 +151,20 @@
         <div class="col">
           <div class="panel admin-only">
             <h2>Import delegates</h2>
-            <p class="hint">Upload a CSV with <strong>first name, last name, delegation name, delegation number</strong> and <strong>fundraiser link</strong>. Teams are matched by delegation number (then name) and created if new. Anyone already on a team's list is skipped, so you can import an updated file again.</p>
-            <label class="btn file-btn" for="csv-file">Choose CSV file</label>
+            <p class="hint">For station check-in. CSV columns: <strong>first name, last name, delegation name</strong>. Each person goes on their delegation's list; delegations that don't exist yet are created. Optional extra columns: delegation number, fundraiser link. Anyone already listed is skipped, so you can import an updated file again.</p>
+            <label class="btn file-btn" for="csv-file">Choose delegates CSV</label>
             <input type="file" id="csv-file" class="visually-hidden" accept=".csv,text/csv,text/plain">
             <div id="csv-preview" class="csv-preview" aria-live="polite"></div>
             <div class="actions" style="margin-top:12px"><button class="btn primary" type="button" id="csv-import" disabled>Import</button></div>
+          </div>
+
+          <div class="panel admin-only">
+            <h2>Import fundraiser %</h2>
+            <p class="hint">CSV columns: <strong>delegation name, percentage</strong> (e.g. <code>ISNA High School, 64.4</code> or <code>64.4%</code>). Each listed team's fundraiser % is replaced and points change by the difference. Teams not in the file aren't touched.</p>
+            <label class="btn file-btn" for="fund-file">Choose fundraiser CSV</label>
+            <input type="file" id="fund-file" class="visually-hidden" accept=".csv,text/csv,text/plain">
+            <div id="fund-preview" class="csv-preview" aria-live="polite"></div>
+            <div class="actions" style="margin-top:12px"><button class="btn primary" type="button" id="fund-import" disabled>Update</button></div>
           </div>
 
           <div class="panel admin-only">
@@ -257,6 +266,6 @@
 </div>
 <div class="toast" id="toast" role="status" hidden></div>
 
-<script type="module" src="app.js?v=2026-10-04b"></script>
+<script type="module" src="app.js?v=2026-10-04c"></script>
 </body>
 </html>
