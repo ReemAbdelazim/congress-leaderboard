@@ -56,7 +56,7 @@ const signed = (n) => (r2(n) >= 0 ? "+" : "−") + fmt(Math.abs(n));
    increment of the difference, so totals stay right even when organisers edit at the same time. */
 const HUB_TOTAL = 1000;          // all stations, full delegation
 const FUND_TOTAL = 1000;         // points for 100% of the goal; teams can go past 100%
-const FUND_MAX_PCT = 1000;       // typo guard: 4500 typed instead of 45 is refused
+const FUND_MAX_PCT = 2000;       // typo guard: 4500 typed instead of 45 is refused
 const stationsN = () => state.settings.stations || 8;
 const stationName = (s) => { const v = (state.settings.stationNames || [])[s - 1]; return typeof v === "string" ? v.trim() : ""; };
 const stationLabel = (s) => stationName(s) ? `Station ${s} · ${stationName(s)}` : `Station ${s}`;
